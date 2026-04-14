@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=DroneLab Connector
+Comment=Launch DroneLab Connector via Distrobox
+Exec=konsole -e distrobox enter lrs-drones -- bash -ic "source /home/deck/Projects/drone-lab-connector/install/setup.bash && ros2 run drone_lab_connector drone_lab_connector; exec bash"
+Icon=utilities-terminal
+Type=Application
+Terminal=false
+Categories=Development;

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Gazebo Environment
+Comment=Launch Gazebo for LRS-FEI Simulation
+Exec=konsole -e distrobox enter lrs-drones -- bash -ic "cd /home/deck/LRS-FEI && source /home/deck/LRS-FEI/gazebo_setup.bash && gazebo /home/deck/LRS-FEI/worlds/fei_lrs_gazebo.world; exec bash"
+Icon=utilities-terminal
+Type=Application
+Terminal=false
+Categories=Development;

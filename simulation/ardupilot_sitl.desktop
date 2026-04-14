@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ArduPilot SITL
+Comment=Launch ArduCopter SITL via Distrobox
+Exec=konsole -e distrobox enter lrs-drones -- bash -ic "cd /home/deck/ardupilot/ArduCopter && ../Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --console; exec bash"
+Icon=utilities-terminal
+Type=Application
+Terminal=false
+Categories=Development;
