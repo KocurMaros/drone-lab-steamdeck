@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "Setting mode to GUIDED..."
 ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode "{base_mode: 0, custom_mode: 'GUIDED'}"
-sleep 2
+sleep 6
 
 echo "Arming drone..."
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: True}"

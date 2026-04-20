@@ -144,10 +144,130 @@ While the drone is booting, you must bind it to the transmitter. Look at the sma
 Once all setup steps are complete and the LED is solid green, the drone is ready to fly.
 
 ### Flight Controls & Arming
-- **Arming (SF Switch):** Toggle the SF Switch to arm the drone. Keep the switch in the armed position. *(Note: If you do not apply throttle, the drone will automatically disarm after a few seconds).*
-- **Takeoff:** After arming, immediately move the throttle stick to the middle (this should register as 0% in the mixer).
-- **Flight Modes (SE Switch):** Change modes by moving the switch from back to front:
-  `ALT_HOLD` -> `LOITER` -> `GUIDED`
+
+**IMPORTANT:** On real drones you **cannot** arm in GUIDED mode. You must arm in **LOITER** mode first.
+
+The connector enforces this sequence automatically – it will reject arming in GUIDED and reject switching to GUIDED before arming.
+
+#### Manual Arming (Transmitter)
+1. Switch **SE** to **LOITER** mode.
+2. Toggle **SF Switch** to arm. Keep it armed.
+3. Move throttle to mid-stick (0% mixer) for takeoff.
+4. Once airborne and stable, switch **SE** to **GUIDED** for ROS2 position control.
+
+#### ROS2 Arming & Takeoff (Command Line)
+
+Replace `eduXX` with your drone ID (e.g. `edu11`).
+
+**Step 1 – Set LOITER mode:**
+```bash
+ros2 service call /drones/eduXX/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'LOITER'}"
+```
+
+**Step 2 – Arm the drone:**
+```bash
+ros2 service call /drones/eduXX/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
+```
+
+**Step 3 – Takeoff (altitude in metres):**
+```bash
+ros2 service call /drones/eduXX/safe/cmd/takeoff mavros_msgs/srv/CommandTOL "{altitude: 1.0}"
+```
+
+**Step 4 – Switch to GUIDED for position control:**
+```bash
+ros2 service call /drones/eduXX/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'GUIDED'}"
+```
+
+---
+
+## Phase 7: Sending Position Commands via ROS2
+
+### Architecture
+
+All student communication goes through the **safety/relay node**. Students never interact with MAVROS directly. The connector validates setpoints, enforces flight boundaries, and proxies all services.
+
+```
+Student PC  ──►  /drones/eduXX/...  ──►  Safety Node  ──►  MAVROS (internal)  ──►  Drone
+                 (student topics)         (validates)       (hidden topics)
+```
+
+### Student Topics (read directly from MAVROS)
+
+| Topic | Type | Direction | Purpose |
+|-------|------|-----------|---------|
+| `/drones/eduXX/setpoint_position/local` | `PoseStamped` | **Publish** | Position commands (safety-checked) |
+| `/drones/eduXX/local_position/pose` | `PoseStamped` | Subscribe | Current drone position |
+| `/drones/eduXX/state` | `mavros_msgs/State` | Subscribe | Drone state (armed, mode) |
+| `/drones/eduXX/battery` | `sensor_msgs/BatteryState` | Subscribe | Battery voltage/percentage |
+| `/drones/eduXX/error` | `std_msgs/String` | Subscribe | Safety errors & violations |
+| `/drone_markers` | `MarkerArray` | Subscribe (RViz) | All drone positions |
+
+### Student Services (safety-validated, use `safe/` prefix)
+
+| Service | Type | Purpose |
+|---------|------|---------|
+| `/drones/eduXX/safe/cmd/arming` | `CommandBool` | Arm/disarm (blocked unless LOITER) |
+| `/drones/eduXX/safe/set_mode` | `SetMode` | Change flight mode (GUIDED blocked unless armed) |
+| `/drones/eduXX/safe/cmd/takeoff` | `CommandTOL` | Takeoff (altitude checked against safety bounds) |
+| `/drones/eduXX/safe/cmd/land` | `CommandTOL` | Land (always allowed) |
+
+> **Note:** MAVROS raw services (`/drones/eduXX/cmd/arming`, `/set_mode`, etc.) are also accessible but have **no safety validation**. Always use the `safe/` prefix for validated operations.
+
+### Example: Full Flight Sequence
+
+```bash
+# 1. Monitor state
+ros2 topic echo /drones/edu11/state
+
+# 2. Set LOITER mode
+ros2 service call /drones/edu11/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'LOITER'}"
+
+# 3. Arm
+ros2 service call /drones/edu11/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
+
+# 4. Takeoff to 1m
+ros2 service call /drones/edu11/safe/cmd/takeoff mavros_msgs/srv/CommandTOL "{altitude: 1.0}"
+
+# 5. Switch to GUIDED
+ros2 service call /drones/edu11/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'GUIDED'}"
+
+# 6. Send position setpoint (continuous stream required for GUIDED)
+ros2 topic pub --rate 20 /drones/edu11/setpoint_position/local \
+  geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 0.0, z: 1.5}, orientation: {w: 1.0}}}"
+
+# 7. Land
+ros2 service call /drones/edu11/safe/cmd/land mavros_msgs/srv/CommandTOL "{}"
+
+# 8. Disarm (after landed)
+ros2 service call /drones/edu11/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
+```
+
+### Monitoring Commands
+
+```bash
+# Current position
+ros2 topic echo /drones/edu11/local_position/pose
+
+# Battery
+ros2 topic echo /drones/edu11/battery
+
+# Safety errors
+ros2 topic echo /drones/edu11/error
+```
+
+### RViz Visualization
+Add a **MarkerArray** display in RViz subscribed to `/drone_markers` to see all active drone positions with labels.
+
+### Connector Configuration
+
+The connector device IP is configurable in `default_config.yaml` or `~/.config/drone_lab_connector/user_param.yaml`:
+
+```yaml
+connector:
+  ip: "192.168.18.201"
+```
 
 ---
 

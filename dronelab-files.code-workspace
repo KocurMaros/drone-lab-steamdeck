@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../Projects/templates/mavlink-udp-comm-template"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../LRS-FEI"
+		},
+		{
+			"path": "../../Projects/drone-lab-connector/src"
+		}
+	],
+	"settings": {}
+}
