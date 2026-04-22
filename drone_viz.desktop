@@ -2,7 +2,7 @@
 [Desktop Entry]
 Name=Drone Viz (RViz)
 Comment=Launch multi-drone RViz2 visualization with PCD map
-Exec=konsole -e distrobox enter lrs-drones -- bash -ic "source /opt/ros/humble/setup.bash && source ~/LRS-FEI/install/setup.bash && ros2 launch drone_viz drone_viz.launch.py; exec bash"
+Exec=konsole -e /home/deck/Desktop/dronelab/exec-in-docker.sh -- bash -ic "source /opt/ros/humble/setup.bash && source ~/LRS-FEI/install/setup.bash && ros2 launch drone_viz drone_viz.launch.py; exec bash"
 Icon=utilities-terminal
 Type=Application
 Terminal=false

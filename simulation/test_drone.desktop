@@ -3,7 +3,7 @@
 Version=1.0
 Name=Test Drone Sequence
 Comment=Sets mode to GUIDED, arms, and takes off
-Exec=konsole -e distrobox enter lrs-drones -- bash -ic "/home/deck/Desktop/dronelab/simulation/test_drone.sh; exec bash"
+Exec=konsole -e /home/deck/Desktop/dronelab/exec-in-docker.sh -- bash -ic "/home/deck/Desktop/dronelab/simulation/test_drone.sh; exec bash"
 Icon=utilities-terminal
 Terminal=false
 Type=Application

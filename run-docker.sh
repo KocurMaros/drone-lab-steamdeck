@@ -23,6 +23,7 @@ $DOCKER_CMD run -it \
     --env="DISPLAY" \
     --env="QT_X11_NO_MITSHM=1" \
     --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-    --volume="$HOME/Desktop/LRS-FEI:/home/deck/LRS-FEI:rw" \
+    --volume="$HOME/Projects:/home/deck/Projects:rw" \
+    --volume="$HOME/LRS-FEI:/home/deck/LRS-FEI:rw" \
     --name="dronelab-sim" \
     dronelab-sim-ubuntu2204 /bin/bash
