@@ -26,6 +26,7 @@ RUN useradd -m -s /bin/bash deck && \
 USER deck
 WORKDIR /home/deck
 ENV USER=deck
+ENV PATH="/home/deck/.local/bin:${PATH}"
 
 
 # --- Stage 2: Install ROS 2 Humble ---
