@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Start Container
+Comment=Run DroneLab Docker Container
+Exec=konsole -e /home/deck/Desktop/dronelab/scripts/run-docker.sh
+Icon=/home/deck/Desktop/dronelab/resources/icons/docker.png
+Type=Application
+Terminal=false
+Categories=Development;

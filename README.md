@@ -105,15 +105,15 @@ sudo systemctl status mavlink-router.service
 
 ---
 
-## Phase 4: ROS2 Connector
+## Phase 4: ROS2 Connector & Domain Bridge
 
-The Connector bridges MAVLink messages to ROS2 topics and enforces flight boundary checks.
+The Connector bridges MAVLink messages to ROS2 topics, enforces flight boundary checks, and isolates the student network (Domain 0) from the drone network (Domain 11) using `domain_bridge`.
 
-Run the connector node:
+To run the wrapper for real drones, use the C++ GUI or run the wrapper launch file directly:
 ```bash
-ros2 run drone_lab_connector drone_lab_connector
+ros2 launch drone_wrapper_pkg drone_wrapper.launch.py namespace:=/drones/edu11 tgt_system:=11
 ```
-Follow the GUI/terminal prompts to select the specific drone you want to communicate with. You can now subscribe to and publish ROS2 messages on your personal PC.
+Follow the GUI/terminal prompts to select the specific drone you want to communicate with. You can now subscribe to and publish ROS2 messages on your personal PC on `ROS_DOMAIN_ID=0`.
 
 ---
 
@@ -157,26 +157,26 @@ The connector enforces this sequence automatically – it will reject arming in 
 
 #### ROS2 Arming & Takeoff (Command Line)
 
-Replace `eduXX` with your drone ID (e.g. `edu11`).
+Replace `drone11` with your drone namespace.
 
-**Step 1 – Set LOITER mode:**
+**Step 1 – Arm and Takeoff Sequence:**
+The new `arming_node` simplifies the takeoff process. By calling the custom arming service, the drone automatically switches to LOITER, arms, and switches to GUIDED mode.
 ```bash
-ros2 service call /drones/eduXX/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'LOITER'}"
+ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 ```
 
-**Step 2 – Arm the drone:**
+**Step 2 – Send position setpoints:**
+Once armed and in GUIDED mode, you must stream position commands continuously to take off and move.
 ```bash
-ros2 service call /drones/eduXX/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
+ros2 topic pub --rate 20 /drone11/setpoint_position/local \
+  geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 0.0, z: 1.5}, orientation: {w: 1.0}}}"
 ```
 
-**Step 3 – Takeoff (altitude in metres):**
+**Step 3 – Land/Disarm:**
+Send a `CommandBool "{value: false}"` to the arming service to land/disarm.
 ```bash
-ros2 service call /drones/eduXX/safe/cmd/takeoff mavros_msgs/srv/CommandTOL "{altitude: 1.0}"
-```
-
-**Step 4 – Switch to GUIDED for position control:**
-```bash
-ros2 service call /drones/eduXX/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'GUIDED'}"
+ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
 ```
 
 ---
@@ -185,88 +185,76 @@ ros2 service call /drones/eduXX/safe/set_mode mavros_msgs/srv/SetMode "{custom_m
 
 ### Architecture
 
-All student communication goes through the **safety/relay node**. Students never interact with MAVROS directly. The connector validates setpoints, enforces flight boundaries, and proxies all services.
+All student communication goes through the **domain bridge** and **safety validation node**. Students never interact with MAVROS directly. The wrapper validates setpoints and enforces flight boundaries.
+
+- **Student Network**: `ROS_DOMAIN_ID=0`
+- **Drone Network**: `ROS_DOMAIN_ID=11` (or respective drone ID)
 
 ```
-Student PC  ──►  /drones/eduXX/...  ──►  Safety Node  ──►  MAVROS (internal)  ──►  Drone
-                 (student topics)         (validates)       (hidden topics)
+Student PC (Domain 0) ──► Validation Node ──► Domain Bridge ──► MAVROS (Domain 11) ──► Drone
 ```
 
-### Student Topics (read directly from MAVROS)
+### Student Topics (Domain 0)
+
+These topics are bridged from the drone to the student:
 
 | Topic | Type | Direction | Purpose |
 |-------|------|-----------|---------|
-| `/drones/eduXX/setpoint_position/local` | `PoseStamped` | **Publish** | Position commands (safety-checked) |
-| `/drones/eduXX/local_position/pose` | `PoseStamped` | Subscribe | Current drone position |
-| `/drones/eduXX/state` | `mavros_msgs/State` | Subscribe | Drone state (armed, mode) |
-| `/drones/eduXX/battery` | `sensor_msgs/BatteryState` | Subscribe | Battery voltage/percentage |
-| `/drones/eduXX/error` | `std_msgs/String` | Subscribe | Safety errors & violations |
-| `/drone_markers` | `MarkerArray` | Subscribe (RViz) | All drone positions |
+| `/drone11/setpoint_position/local` | `PoseStamped` | **Publish** | Position commands (safety-checked) |
+| `/drone11/odom` | `NavSatFix` | Subscribe | Current drone position / Odometry |
+| `/drone11/state` | `mavros_msgs/State` | Subscribe | Drone state (armed, mode) |
+| `/drone11/battery` | `sensor_msgs/BatteryState` | Subscribe | Battery voltage/percentage |
+| `/drone11/gps` | `sensor_msgs/NavSatFix` | Subscribe | Global position |
 
-### Student Services (safety-validated, use `safe/` prefix)
+### Student Services (Domain 0)
+
+The complex arming sequence is abstracted behind a single service call provided by the `arming_node`.
 
 | Service | Type | Purpose |
 |---------|------|---------|
-| `/drones/eduXX/safe/cmd/arming` | `CommandBool` | Arm/disarm (blocked unless LOITER) |
-| `/drones/eduXX/safe/set_mode` | `SetMode` | Change flight mode (GUIDED blocked unless armed) |
-| `/drones/eduXX/safe/cmd/takeoff` | `CommandTOL` | Takeoff (altitude checked against safety bounds) |
-| `/drones/eduXX/safe/cmd/land` | `CommandTOL` | Land (always allowed) |
+| `/drone11/cmd/arming` | `CommandBool` | `true` executes LOITER -> ARM -> GUIDED sequence. `false` sends disarm command. |
 
-> **Note:** MAVROS raw services (`/drones/eduXX/cmd/arming`, `/set_mode`, etc.) are also accessible but have **no safety validation**. Always use the `safe/` prefix for validated operations.
+> **Note:** MAVROS raw services are hidden behind Domain 11 and not natively accessible to students on Domain 0. Always use the `/drone11/cmd/arming` for validated operations.
 
 ### Example: Full Flight Sequence
 
 ```bash
 # 1. Monitor state
-ros2 topic echo /drones/edu11/state
+ros2 topic echo /drone11/state
 
-# 2. Set LOITER mode
-ros2 service call /drones/edu11/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'LOITER'}"
+# 2. Arm and enter GUIDED mode
+ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 
-# 3. Arm
-ros2 service call /drones/edu11/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
-
-# 4. Takeoff to 1m
-ros2 service call /drones/edu11/safe/cmd/takeoff mavros_msgs/srv/CommandTOL "{altitude: 1.0}"
-
-# 5. Switch to GUIDED
-ros2 service call /drones/edu11/safe/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'GUIDED'}"
-
-# 6. Send position setpoint (continuous stream required for GUIDED)
-ros2 topic pub --rate 20 /drones/edu11/setpoint_position/local \
+# 3. Takeoff to 1.5m by sending position setpoint (continuous stream required for GUIDED)
+ros2 topic pub --rate 20 /drone11/setpoint_position/local \
   geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 0.0, z: 1.5}, orientation: {w: 1.0}}}"
 
-# 7. Land
-ros2 service call /drones/edu11/safe/cmd/land mavros_msgs/srv/CommandTOL "{}"
-
-# 8. Disarm (after landed)
-ros2 service call /drones/edu11/safe/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
+# 4. Disarm / Land
+ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
 ```
 
 ### Monitoring Commands
 
 ```bash
 # Current position
-ros2 topic echo /drones/edu11/local_position/pose
+ros2 topic echo /drone11/odom
 
 # Battery
-ros2 topic echo /drones/edu11/battery
-
-# Safety errors
-ros2 topic echo /drones/edu11/error
+ros2 topic echo /drone11/battery
 ```
-
-### RViz Visualization
-Add a **MarkerArray** display in RViz subscribed to `/drone_markers` to see all active drone positions with labels.
 
 ### Connector Configuration
 
-The connector device IP is configurable in `default_config.yaml` or `~/.config/drone_lab_connector/user_param.yaml`:
+The bounds configuration can be managed via the `drone_wrapper_pkg` boundaries yaml:
 
 ```yaml
-connector:
-  ip: "192.168.18.201"
+x_min: -5.0
+x_max: 5.0
+y_min: -5.0
+y_max: 5.0
+z_min: 0.0
+z_max: 3.0
 ```
 
 ---

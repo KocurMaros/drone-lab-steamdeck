@@ -3,7 +3,7 @@
 Version=1.0
 Name=Test Drone Sequence
 Comment=Sets mode to GUIDED, arms, and takes off
-Exec=konsole -e /home/deck/Desktop/dronelab/exec-in-docker.sh -- bash -ic "/home/deck/Desktop/dronelab/simulation/test_drone.sh; exec bash"
-Icon=utilities-terminal
+Exec=konsole -e /home/deck/Desktop/dronelab/scripts/exec-in-docker.sh -- bash -ic "/home/deck/Desktop/dronelab/simulation/test_drone.sh; exec bash"
+Icon=/home/deck/Desktop/dronelab/resources/icons/test.jpg
 Terminal=false
 Type=Application

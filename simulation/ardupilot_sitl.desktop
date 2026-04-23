@@ -1,8 +1,8 @@
 [Desktop Entry]
 Name=ArduPilot SITL
 Comment=Launch ArduCopter SITL via Distrobox
-Exec=konsole -e /home/deck/Desktop/dronelab/exec-in-docker.sh -- bash -ic "cd /home/deck/ardupilot/ArduCopter && ../Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --console; exec bash"
-Icon=utilities-terminal
+Exec=konsole -e /home/deck/Desktop/dronelab/scripts/exec-in-docker.sh -- bash -ic "cd /home/deck/ardupilot/ArduCopter && ../Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --console; exec bash"
+Icon=/home/deck/Desktop/dronelab/resources/icons/ardupilot.png
 Type=Application
 Terminal=false
 Categories=Development;

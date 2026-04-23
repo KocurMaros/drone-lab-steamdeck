@@ -1,8 +1,8 @@
 [Desktop Entry]
 Name=LRS-FEI MAVROS
 Comment=Launch MAVROS Simulation Environment via Distrobox
-Exec=konsole -e /home/deck/Desktop/dronelab/exec-in-docker.sh -- bash -ic "cd ~/LRS-FEI && source /opt/ros/humble/setup.bash && source install/setup.bash 2>/dev/null; ros2 launch mavros apm.launch fcu_url:=udp://127.0.0.1:14550@14555; exec bash"
-Icon=applications-engineering
+Exec=konsole -e /home/deck/Desktop/dronelab/scripts/exec-in-docker.sh -- bash -ic "cd ~/LRS-FEI && source /opt/ros/humble/setup.bash && source install/setup.bash 2>/dev/null; ros2 launch mavros apm.launch fcu_url:=udp://127.0.0.1:14550@14555; exec bash"
+Icon=/home/deck/Desktop/dronelab/resources/icons/mavros.png
 Type=Application
 Terminal=false
 Categories=Development;
