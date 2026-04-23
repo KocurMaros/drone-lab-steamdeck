@@ -1,11 +1,20 @@
 #!/bin/bash
 
+# Ensure we are in the correct directory (where the Dockerfile is)
+cd "/home/deck/Desktop/dronelab" || exit
+
 echo "Building the simulation environment container in Docker..."
+
+export PATH="/home/deck/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # Fallback to docker if podman is broken, or use podman if available
 DOCKER_CMD="docker"
 if command -v podman &> /dev/null; then
     DOCKER_CMD="podman"
+elif [ -x "/home/deck/.local/bin/podman" ]; then
+    DOCKER_CMD="/home/deck/.local/bin/podman"
+elif [ -x "/usr/bin/podman" ]; then
+    DOCKER_CMD="/usr/bin/podman"
 fi
 
 echo "Using container engine: $DOCKER_CMD"
