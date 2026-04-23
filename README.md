@@ -249,13 +249,35 @@ ros2 topic echo /drone11/battery
 The bounds configuration can be managed via the `drone_wrapper_pkg` boundaries yaml:
 
 ```yaml
-x_min: -5.0
-x_max: 5.0
-y_min: -5.0
-y_max: 5.0
-z_min: 0.0
-z_max: 3.0
+x_min: -0.5
+x_max: 4.0
+y_min: -0.5
+y_max: 6.0
+z_min: 0.5
+z_max: 2.5
 ```
+
+### Adding New Topics (Domain Bridging)
+
+If you need to expose additional MAVROS topics (like IMU data or camera triggers) to the student network in the future, you must update the Domain Bridge YAML configurations located in `drone_wrapper_pkg/config/`:
+
+1. **Drone to Student (Telemetry):** Edit `domain_bridge_topics.yaml`
+   Add the internal MAVROS topic under the `topics` dictionary and use `remap` to expose it cleanly to students.
+   ```yaml
+   topics:
+     /drones/edu11/mavros_node/imu/data:
+       type: sensor_msgs/msg/Imu
+       remap: /drone11/imu
+   ```
+
+2. **Student to Drone (Commands):** Edit `domain_bridge_topics_0_to_11.yaml`
+   If you want students to publish a new command, ensure it passes through the Python validation node first, then add the validated topic here to cross the bridge.
+   ```yaml
+   topics:
+     /drones/edu11/new_command_topic:
+       type: std_msgs/msg/String
+   ```
+*Note: After modifying these YAML files, you must rebuild the workspace `colcon build` and restart the Connector container to apply changes.*
 
 ---
 

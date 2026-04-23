@@ -83,6 +83,8 @@ RUN sudo apt-get update && sudo apt-get install -y \
     ros-humble-mavros \
     ros-humble-gazebo-ros-pkgs \
     ros-humble-image-pipeline \
+    ros-humble-domain-bridge \
+    ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rviz2 \
     && wget https://raw.githubusercontent.com/mavlink/mavros/ros2/mavros/scripts/install_geographiclib_datasets.sh \
     && chmod a+x install_geographiclib_datasets.sh \
@@ -91,6 +93,8 @@ RUN sudo apt-get update && sudo apt-get install -y \
 
 # Final environment variables for LRS-FEI repo which user mounts natively
 ENV GAZEBO_MODEL_PATH=/home/deck/LRS-FEI/models
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 RUN echo "export GAZEBO_MODEL_PATH=/home/deck/LRS-FEI/models" >> /home/deck/.bashrc
+RUN echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> /home/deck/.bashrc
 
 CMD ["/bin/bash"]
