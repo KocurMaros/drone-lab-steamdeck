@@ -7,10 +7,10 @@
 			"path": "."
 		},
 		{
-			"path": "../LRS-FEI"
+			"path": "../../Projects/drone-lab-connector/src"
 		},
 		{
-			"path": "../../Projects/drone-lab-connector/src"
+			"path": "../../LRS-FEI"
 		}
 	],
 	"settings": {}

@@ -19,12 +19,20 @@ fi
 
 echo "Using container engine: $DOCKER_CMD"
 
+# Steam Deck / Rootless Podman specific fix for reboot state corruption
+if [[ "$DOCKER_CMD" == *"podman"* ]]; then
+    $DOCKER_CMD system migrate 2>/dev/null || true
+fi
+
 # Build the layered image directly
 $DOCKER_CMD build -t dronelab-sim-ubuntu2204 .
 
 # Run the image with X11 forwarding for Gazebo/GUI
 echo "Starting container with X11 forwarding for Gazebo & ROS..."
 xhost +local: || true
+
+# Clean up any stuck/old container with the same name before starting a new one
+$DOCKER_CMD rm -f dronelab-sim 2>/dev/null || true
 
 $DOCKER_CMD run -it \
     --rm \

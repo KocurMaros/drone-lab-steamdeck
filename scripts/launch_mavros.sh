@@ -1,0 +1,2 @@
+#!/bin/bash
+/home/deck/Desktop/dronelab/scripts/exec-in-docker.sh -- bash -ic 'read -p "Enter Drone SYS_ID (default 1): " sysid; sysid=${sysid:-1}; export ROS_DOMAIN_ID=$sysid; echo "Starting MAVROS on Domain $sysid for /drones/edu$sysid"; cd ~/LRS-FEI && source /opt/ros/humble/setup.bash && source install/setup.bash 2>/dev/null; ros2 launch mavros apm.launch fcu_url:=udp://127.0.0.1:14550@127.0.0.1:14555 namespace:=/drones/edu$sysid tgt_system:=$sysid; exec bash'
