@@ -108,6 +108,7 @@ class DronePanel(QWidget):
         self.errors.setMaximumHeight(130)
         root.addWidget(self.errors)
         self._last_err_key = None
+        self._low_rate_since: Optional[float] = None
 
     def _release(self):
         st = self.h.status
@@ -173,7 +174,10 @@ class DronePanel(QWidget):
         if st.get("locked"):
             warn.append(f"LOCKED: {st.get('lock_reason')}. Student commands are blocked until you press "
                         f"RELEASE LOCK.")
-        if st.get("connected") and st.get("pose_rate", 20) < 8:
+        low = st.get("connected") and st.get("pos") is not None and st.get("pose_rate", 20) < 8
+        now = time.monotonic()
+        self._low_rate_since = (self._low_rate_since or now) if low else None
+        if low and now - self._low_rate_since > 6.0:   # ignore the first seconds while the stream ramps up
             warn.append(f"Position arrives at only {st.get('pose_rate')} Hz - fence checks are slow "
                         f"(the gate requests 20 Hz; check the Wi-Fi link / SR0_* parameters).")
         if st.get("executors_alive") is False:
