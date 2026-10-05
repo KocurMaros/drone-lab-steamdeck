@@ -97,4 +97,18 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 RUN echo "export GAZEBO_MODEL_PATH=/home/deck/LRS-FEI/models" >> /home/deck/.bashrc
 RUN echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> /home/deck/.bashrc
 
+
+# --- Stage 7: DroneLab apps (added last so the heavy layers above stay cached) ---
+# The apps themselves are NOT copied into the image: the repo is mounted at
+# /opt/dronelab by scripts/dronelab.sh, so a `git pull` needs no rebuild.
+RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+        python3-pyqt5 python3-yaml python3-psutil \
+        xdotool wmctrl x11-xserver-utils iproute2 mesa-utils \
+    && sudo rm -rf /var/lib/apt/lists/*
+# pygame wheel bundles a recent SDL2 (gamepad mappings, container-friendly hotplug)
+RUN python3 -m pip install --user --no-cache-dir "pygame==2.6.1"
+RUN echo "source /opt/ros/humble/setup.bash" >> /home/deck/.profile
+# bump together with IMAGE_VERSION in scripts/dronelab.sh
+LABEL dronelab.version="2"
+
 CMD ["/bin/bash"]

@@ -1,0 +1,25 @@
+# DroneLab demo SITL overrides, loaded after ArduPilot's copter.parm + gazebo-iris.parm.
+# SITL is started with -w (wipe), so every start begins from exactly these values.
+
+# snappier GUIDED velocity control for visitors (the gate still limits speeds)
+WPNAV_SPEED     800
+WPNAV_SPEED_UP  300
+WPNAV_SPEED_DN  250
+WPNAV_ACCEL     400
+LAND_SPEED      90
+RTL_ALT         800
+
+# ArduPilot's own geofence as a second, independent safety layer (the gate's box is inside it)
+FENCE_ENABLE    1
+FENCE_TYPE      3
+FENCE_RADIUS    70
+FENCE_ALT_MAX   20
+FENCE_MARGIN    3
+FENCE_ACTION    1
+
+# The Demo app teleports the drone back to the pad after a crash: reset the EKF
+# to GPS quickly instead of reporting a long "GPS glitch".
+EK3_GLITCH_RAD  2
+
+# land & disarm quickly between visitors
+DISARM_DELAY    4

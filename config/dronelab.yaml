@@ -1,0 +1,146 @@
+# ============================================================================
+# DroneLab Steam Deck configuration
+#
+# Read by the Flight app (real drones), the Demo app (simulation) and the gate.
+# Edit it from the Flight app (Settings -> Open config) or any text editor;
+# the apps reload it when you press "Reload config".
+# Local overrides that should not be committed can go to config/local.yaml
+# (same structure, merged on top of this file, ignored by git).
+# ============================================================================
+
+network:
+  # -- Discovery -------------------------------------------------------------
+  # Drones whose mavlink-router PUSHES telemetry to the Deck ("Mode = Normal"
+  # endpoints) are found by listening on these UDP ports. Ranges are inclusive.
+  listen_ports: ["14510-14519", "14540-14559"]
+  # Drones whose mavlink-router has a "Mode = Server" endpoint answer when we
+  # send them a heartbeat. We probe this port on the targets below.
+  probe_port: 14550
+  probe_targets:
+    - "192.168.18.110-119"   # lab Wi-Fi (OSK_24 / OSK_5), drone IP = 192.168.18.1<ID>
+    - "10.42.0.1"            # drone's own hotspot
+    - "192.168.55.1"         # USB tether
+  # Also probe .1-.254 of every IPv4 /24 the Deck is currently on, so a new
+  # subnet works without editing this file.
+  probe_local_subnets: true
+  probe_interval_s: 3.0
+  # A drone is shown as "lost" after this many seconds without a heartbeat.
+  stale_after_s: 4.0
+
+  # -- ROS 2 isolation ---------------------------------------------------------
+  # Students live on this ROS_DOMAIN_ID (on the lab network).
+  student_domain: 0
+  # MAVROS for drone N runs on domain private_domain_base + N, bound to the
+  # loopback interface only. Students cannot reach it, only the gate can.
+  # Must stay <= 101 (Linux DDS port range), so base + highest sysid <= 101.
+  private_domain_base: 70
+  # Network interface students reach the Deck on: "auto" or e.g. "wlan0".
+  student_interface: auto
+
+# Defaults for every drone; per-system-ID overrides below.
+drone_defaults:
+  student_ns: "/drone{sysid}"        # students use /drone11/..., /drone12/... etc.
+  fence_profile: indoor_lab
+  arm_sequence: loiter_arm_guided     # real ArduCopter cannot arm in GUIDED
+  guided_requires_armed: true
+  mavros_launch: apm                  # MAVROS parameter set: apm (ArduPilot) or px4
+  mavros_system_id: 255               # = ArduPilot SYSID_MYGCS, so FS_GCS_ENABLE treats the Deck as the GCS
+  gcs_url: ""                         # e.g. "udp-b://@14560" to mirror to QGroundControl (also a command path!)
+
+drone_overrides:
+  1:                                  # SITL / demo drone
+    fence_profile: sim_arena
+    arm_sequence: direct
+    guided_requires_armed: false
+
+gate:
+  # What to do when the MEASURED position leaves the fence (+ margin):
+  #   land  -> switch to LAND once and lock out student commands until the
+  #            instructor presses "Release lock" in the Flight app (default)
+  #   brake -> switch to BRAKE once and lock (needs a good position estimate)
+  #   none  -> only publish errors
+  breach_action: land
+  breach_samples: 3                   # consecutive out-of-fence poses before acting
+  # Modes students may select (a profile can override this). Not RTL indoors: it climbs to
+  # RTL_ALT (15 m on the lab drones) at full speed. Not ALT_HOLD/POSHOLD: they need RC sticks.
+  # LAND is always allowed. Modes chosen by the instructor (Flight app buttons), the RC or a
+  # failsafe (LAND/RTL/BRAKE) cannot be left by students while the drone is armed.
+  allowed_modes: [GUIDED, LOITER, LAND, BRAKE]
+  error_rate_hz: 2.0                  # max error messages per second per error type
+  status_rate_hz: 2.0
+
+limits:                               # applied to every velocity command
+  max_speed_xy: 1.0                   # m/s
+  max_speed_z: 0.5                    # m/s
+  max_yaw_rate_deg: 45                # deg/s
+  # Near a wall the allowed speed v satisfies  v*lookahead + v^2/(2*decel) <= distance.
+  # lookahead = latency + ArduPilot's jerk-limited ramp into braking (measured in SITL: ~1 s).
+  lookahead_s: 1.0                    # s
+  decel: 1.5                          # m/s^2, keep below WPNAV_ACCEL
+  stop_buffer_m: 0.2                  # velocity limiting stops this far inside the fence (response lag);
+                                      # verify on the bench by flying slowly at a wall, raise if it crosses
+  pose_timeout_s: 0.5                 # older pose = unknown position
+
+fence_profiles:
+  indoor_lab:
+    label: "Indoor lab (OptiTrack)"
+    type: box
+    frame: local
+    # Arena frame (what students command and what this fence uses) relative to
+    # the MAVROS local frame: local = R(yaw) * arena + (x, y, z).
+    # Leave at zero if the drone's EKF origin is the OptiTrack origin.
+    arena_to_local: {x: 0.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+    x: [-0.5, 4.0]
+    y: [-0.5, 6.0]
+    z: [0.5, 2.5]          # min = lowest altitude students may command, max = ceiling
+    margin_m: 0.3          # breach monitor triggers this far outside the box
+    verified: true
+
+  outdoor_field:
+    label: "Outdoor field (GPS) - EXAMPLE"
+    type: polygon
+    frame: global
+    # lat, lon of each corner, in order. EXAMPLE around FEI STU - REPLACE IT.
+    points:
+      - [48.15060, 17.07230]
+      - [48.15060, 17.07310]
+      - [48.15110, 17.07310]
+      - [48.15110, 17.07230]
+    alt_rel_m: [3.0, 30.0]  # altitude RELATIVE TO HOME (take-off point), metres
+    margin_m: 3.0
+    # The Flight app shows a warning and asks for confirmation while this is false.
+    verified: false
+    allowed_modes: [GUIDED, LOITER, LAND, BRAKE, RTL]
+    limits: {max_speed_xy: 3.0, max_speed_z: 1.0, lookahead_s: 1.5, decel: 2.0, stop_buffer_m: 1.0}
+
+  sim_arena:
+    label: "Simulation arena"
+    type: box
+    frame: local
+    # The demo drone spawns on the pad at the world origin, so the MAVROS local
+    # ENU frame IS the arena frame (keep in sync with sim/course/arena.yaml).
+    arena_to_local: {x: 0.0, y: 0.0, z: 0.0, yaw_deg: 0.0}
+    x: [-28, 28]       # east
+    y: [-38, 38]       # north
+    z: [0.5, 14.0]
+    margin_m: 2.0
+    verified: true
+    allowed_modes: [GUIDED, LOITER, LAND, BRAKE, RTL]
+    limits: {max_speed_xy: 6.0, max_speed_z: 2.5, max_yaw_rate_deg: 90, lookahead_s: 1.5, decel: 3.0,
+             pose_timeout_s: 1.0, stop_buffer_m: 1.0}
+
+# ---------------------------------------------------------------------------
+# Simulation demo (DroneLab Demo icon)
+# ---------------------------------------------------------------------------
+demo:
+  student_domain: 0                 # the simulated drone appears to students as /drone1 here
+  ardupilot_dir: ~/ardupilot        # built in the container image
+  ardupilot_gazebo_models: ~/ardupilot_gazebo/models
+  world: sim/worlds/dronelab_arena.world
+  home: "48.1508457,17.0727297,140,0"   # keep in sync with sim/course/arena.yaml
+  show_gazebo: auto                 # auto = chase view only when a second screen is connected; on / off
+  camera_topic: /drone1/camera/image_raw
+  takeoff_alt: 2.5
+  skill:                            # visitor speeds (the sim_arena fence profile caps them anyway)
+    beginner: {xy: 3.0, z: 1.5, yaw_deg: 60}
+    expert:   {xy: 6.0, z: 2.5, yaw_deg: 90}

@@ -1,291 +1,206 @@
-# DroneLab Setup & Execution Guide
+# DroneLab on the Steam Deck
 
-This guide details the complete step-by-step process for setting up the DroneLab environment, from configuring the OptiTrack system on the Desktop PC to executing your first ROS-controlled flight.
+Two touch-friendly apps for the Steam Deck (SteamOS desktop mode). Everything runs in one
+container that keeps running in the background.
 
-## 🌐 System Architecture & Network
+| Icon | What it does |
+|------|--------------|
+| **DroneLab Flight** | Finds real drones on whatever subnet/port they use, starts MAVROS for them and puts a **safety gate** between the students and the drone (geofence, speed limits, error topic, breach → LAND). |
+| **DroneLab Demo** | One-tap simulation for visitors: Gazebo arena with a gate race, gamepad flying (Steam Deck controls or any pad), live FPV camera with HUD, minimap, leaderboard. Gazebo's chase view goes to a second screen. |
 
-**Communication Flow:**
-`Motive PC (Desktop) <-> DRONE <-> Connector (SteamDeck) <-> Your PC`
-
-**Network Requirements:**
-- All devices must be connected to the same network.
-- Recommended/Tested Networks: `OSK_24` or `OSK_5`.
-- IP Range: `192.168.18.1/24`
-
----
-
-## Phase 1: OptiTrack Desktop PC Setup
-
-### 1. Network Configuration
-Set a static IP on the Desktop PC running Motive:
-- **IP Address:** `192.168.18.200`
-- **Subnet Mask:** `255.255.255.0`
-
-### 2. Motive Streaming Settings
-Open Motive and navigate to the **Settings -> Streaming** tab. Configure the following:
-- **Enable:** Checked
-- **Local Interface:** `192.168.18.200`
-- **Transmission Type:** Multicast
-- **Up Axis:** Y-Axis
-- **Advanced Settings:**
-  - **Data Port:** `1511`
-  - **Command Port:** `1510`
-  - **Multicast Interface:** `239.255.42.99`
-
-### 3. Drone Marker Placement & Rigid Body Creation
-To track the drone, you must attach reflective markers.
-
-**Requirements:**
-- Minimum 3 markers for basic tracking, minimum 4 for rigid body creation.
-- Recommended: 10+ markers for robust, occlusion-resistant tracking.
-
-**Placement Recommendations:**
-- Place markers asymmetrically (avoids orientation flipping).
-- Mount them at different heights (e.g., on top of the battery, on the arms, and underneath) to create a 3D volume.
-- Ensure they are rigidly attached so they do not vibrate during flight.
-
-**Creating the Rigid Body:**
-1. Place the drone in the center of the tracking space (0, 0, 0).
-2. Ensure the drone is on the ground, facing the Z-arrow.
-3. In Motive, box-select all the markers on the drone.
-4. Right-click and select **Create Rigid Body**.
-5. In the Assets Menu, change the **Name** and **Streaming ID** to match the Drone ID (e.g., 10 through 19). 
-   *Note: Streaming IDs must be unique for multiple devices flying simultaneously.*
-
-### 4. Aligning the Axes
-Open the Rigid Body Builder and align the orientation axes:
-- **X Axis (Red Arrow):** Match to OptiTrack Left.
-- **Y Axis (Green Arrow):** Match to OptiTrack UP.
-- **Z Axis (Blue Arrow):** Match to OptiTrack Drone Front.
+Lab hardware procedures (OptiTrack/Motive, drone network, transmitter pairing, emergency
+procedures) are in [docs/lab-setup.md](docs/lab-setup.md).
 
 ---
 
-## Phase 2: MAVProxy Integration
+## Install (once, on the Deck)
 
-Once Motive is streaming, you need to connect it to MAVProxy.
-
-Run the MAVProxy script:
 ```bash
-mavproxy.py
+git clone https://github.com/KocurMaros/drone-lab-steamdeck.git ~/Desktop/dronelab   # any folder works
+~/Desktop/dronelab/scripts/install-desktop.sh
 ```
-*Note: It will automatically discover the connected device on port `14550`. If running multiple devices, you must start MAVProxy via the terminal with specific port input parameters.*
 
-In the MAVProxy console, execute the following commands to initialize OptiTrack:
-```bash
-module load optitrack
-optitrack set obj_id 10  # Replace '10' with your actual Streaming ID/Drone ID
-optitrack set client 192.168.18.200
-optitrack set server 192.168.18.200
-optitrack start
-```
-**Verification:** Check the white MAVProxy console. You should see `pre-arm good` and a continuous feed of estimated x, y, z positions.
+This puts **DroneLab Flight**, **DroneLab Demo** and **DroneLab Shell** in the menu and on the Desktop.
+The first start builds the container image (`podman`, preinstalled on SteamOS 3.5+; 30–60 min the
+first time, a Konsole window shows progress). Later starts take seconds. After `git pull` no
+rebuild is needed unless the `Dockerfile` changed (the launcher notices and rebuilds).
+
+For the Deck's own sticks/buttons in the Demo, add `scripts/dronelab-demo-steam.sh` to Steam as a
+*Non-Steam Game* and start it from Steam (controller layout "Gamepad"). External USB/Bluetooth pads
+also work from the desktop icon.
+
+Terminal equivalents: `scripts/dronelab.sh flight | demo | shell | build | stop | status`.
 
 ---
 
-## Phase 3: Drone-Side Configuration
+## DroneLab Flight (real drones)
 
-### 1. Drone IP Setup
-Connect the drone to the network and set a static IP in the format `192.168.18.1xx` (where `xx` is your Drone ID).
-
-### 2. MAVLink Router Configuration
-You must configure endpoints so the drone routes data to the connector.
-
-Edit the configuration file:
-```bash
-sudo nano /etc/mavlink-router/main.conf
 ```
-Ensure endpoints are created targeting the drone-connector (`192.168.18.100`) on port `145xx` (where `xx` is the Drone ID) for the `OSK_24` or `OSK_5` interfaces.
-
-After any config changes, restart and verify the service:
-```bash
-sudo systemctl restart mavlink-router.service
-sudo systemctl status mavlink-router.service
+ students (lab Wi-Fi, ROS_DOMAIN_ID 0)          Steam Deck                          drone
+ ───────────────────────────────────           ───────────────────────────          ─────
+ /drone11/setpoint_position/local  ──►  gate: fence + limits + rules  ──►  MAVROS  ──►  ArduPilot
+ /drone11/cmd/arming, set_mode ...  ──►  (rejects → /drone11/error)       private ROS domain 81,
+ /drone11/<every MAVROS topic>     ◄──  relay                        ◄──  loopback only
 ```
-*(If this service is not running, no telemetry data will transfer to the PC).*
+
+1. Power the drone. It appears under **FOUND DRONES** with its system ID, mode and how it was reached.
+2. Pick the fence for new connections (top bar; *drone default* = from the config).
+3. **CONNECT**. The gate starts MAVROS on a private ROS domain that is bound to the Deck's loopback
+   interface (students cannot reach MAVROS at all) and exposes the student interface below.
+4. The drone tab shows mode/arming/battery/link/position age/fence state, a top-down fence map with the
+   drone, which student topics are active, and every rejected or limited command.
+5. **LAND** / **BRAKE** / **LOITER** act immediately; **KILL** (hold 2 s) cuts the motors;
+   **LAND ALL** (top right) lands every connected drone. RTL/disarm/log/disconnect are under `···`.
+
+Closing the app asks whether to keep the gates running. Keeping them keeps the fence active; reopening
+the app re-attaches.
+
+### How drones are found (different subnet/port every time)
+
+* **listen** – the Deck listens on UDP `14510-14519` and `14540-14559`. Any drone whose mavlink-router
+  pushes to the Deck (`Mode = Normal` endpoint to the Deck's IP) shows up, on any port in those ranges.
+* **probe** – every 3 s the Deck sends a GCS heartbeat to `<drone>:14550` on `192.168.18.110-119`,
+  `10.42.0.1`, `192.168.55.1` **and every /24 the Deck is currently on**. Drones with a
+  `Mode = Server` endpoint answer, so a new subnet needs no config change.
+* Still nothing? **Manual connection…** takes any MAVROS `fcu_url` (UDP, TCP, serial).
+
+Ports, targets and timings are in `config/dronelab.yaml` → `network`. Every drone needs a unique
+`SYSID_THISMAV` (= drone ID); two drones with the same ID are shown as one.
+
+### Student interface (ROS_DOMAIN_ID 0)
+
+Same names and types as MAVROS, with `/drone<ID>` instead of `/mavros`. Code written against the
+simulation works unchanged on the real drone (the Demo's drone is `/drone1`).
+
+| Topic / service | Type | Gate behaviour |
+|---|---|---|
+| `/droneNN/<every MAVROS topic>` (state, local_position/pose, battery, imu/data, statustext/recv, …) | as MAVROS | relayed (local poses in the arena frame) |
+| `setpoint_position/local` | `geometry_msgs/PoseStamped` | target must be inside the fence (and above `z_min`), else dropped + error. All-zero quaternion = keep heading |
+| `setpoint_velocity/cmd_vel_unstamped`, `setpoint_velocity/cmd_vel` | `Twist` / `TwistStamped` (ENU) | speed limited and slowed to a stop `stop_buffer_m` inside the fence. A rejected velocity becomes a hover, never a silent drop (ArduPilot would keep flying the old one for 3 s). **Stream at ≥ 5 Hz**: 0.5 s after the last velocity the gate commands a hover |
+| `setpoint_raw/local` | `mavros_msgs/PositionTarget` | frames 1, 7, 8, 9; full position or full velocity; acceleration/force rejected (with a hover); a feed-forward velocity next to a position is removed (ArduPilot would push the target through the fence) |
+| `setpoint_position/global` | `geographic_msgs/GeoPoseStamped` | outdoor fences only. **Altitude is relative to home**, not AMSL |
+| `setpoint_raw/global` | `mavros_msgs/GlobalPositionTarget` | outdoor only, `coordinate_frame` 6, position only |
+| `cmd/arming` | `mavros_msgs/CommandBool` | `true`: LOITER → ARM → GUIDED (real drones cannot arm in GUIDED). `false` in the air = LAND instead of cutting the motors |
+| `set_mode` | `mavros_msgs/SetMode` | allow-list per fence profile (indoor: GUIDED, LOITER, LAND, BRAKE; RTL only outdoors/sim); GUIDED only once armed. While armed, students cannot leave LAND/RTL/BRAKE that the instructor, the RC or a failsafe selected |
+| `cmd/takeoff` | `mavros_msgs/CommandTOL` | armed + GUIDED + altitude within the fence |
+| `cmd/land` | `mavros_msgs/CommandTOL` | always allowed |
+| `error` | `std_msgs/String` | every rejection / limitation, rate limited per error type |
+| `gate/status` | `std_msgs/String` (JSON) | fence, limits, lock state, counters |
+| `gate/fence` | `visualization_msgs/Marker` | fence outline for RViz (`map` frame) |
+
+Not exposed on purpose: `cmd/command` (arbitrary MAVLink commands), parameter services, RC override.
+After `cmd/arming` true, take off within ~10 s or ArduPilot disarms again.
+
+### Fence and breach
+
+Fence profiles live in `config/dronelab.yaml` → `fence_profiles`: `box` (indoor, metres in the arena
+frame), `polygon` (lat/lon corners, or local metres) or `circle`, each with a `margin_m`. Profiles marked
+`verified: false` (the outdoor example!) show a warning and need a confirmation before connecting.
+`arena_to_local` maps the arena/OptiTrack frame to the drone's EKF frame if they differ.
+
+The gate also watches the **measured** position (it asks ArduPilot for 20 Hz position and for the landed
+state). If the drone is outside fence + margin for 3 samples while airborne, it switches to **LAND** (re-sent
+until the drone reports LAND) and locks all student commands except landing until you press
+**RELEASE LOCK**. After the release it stays quiet until the drone has been back inside the fence, so it
+can be flown back in. It does not fight your transmitter: once LAND was reached, a mode you select with
+the RC is left alone. The instructor buttons **LAND / BRAKE / LOITER / RTL** also lock student commands.
+
+Tuning near walls: allowed speed `v` satisfies `v·lookahead_s + v²/(2·decel) ≤ distance − stop_buffer_m`.
+In SITL a 6 m/s approach stopped 0.3 m inside the wall with the `sim_arena` values. **Check the indoor
+values on the real drone** (fly slowly at a wall with the RC ready) before students use it.
+
+### What the gate does NOT protect against (read this)
+
+* **MAVLink sent straight to the drone.** The drone's mavlink-router still accepts MAVLink from anyone on
+  the network on its `Server` endpoint (`gcs_radio`, `0.0.0.0:14550` in `drones/main.conf`). A student
+  who sends to `<drone>:14550` bypasses the Deck completely, and also takes the Server endpoint's
+  only client slot away from the Deck. For student sessions, remove Server endpoints from the drone and
+  use a `Normal` endpoint to the Deck's fixed IP (DHCP reservation on the lab router).
+* **Deck or Wi-Fi failure.** If the link drops, the gate can do nothing. Configure ArduPilot's own
+  failsafes and fence; the attached `drones/edu10/*.params` have `FENCE_ENABLE 0` and
+  `FS_GCS_ENABLE 0`. MAVROS identifies as system 255 (= `SYSID_MYGCS`), so with `FS_GCS_ENABLE` set the
+  drone lands/RTLs when the Deck stops sending heartbeats.
+* **Determined attackers on the network.** The private domain blocks normal ROS 2 discovery from other
+  machines; it is not a security boundary against someone crafting DDS packets.
+* **Outdoor flights.** The example outdoor polygon is not your field. EU open-category rules apply
+  (e.g. 120 m max height, VLOS, registered operator); a software fence does not replace them.
+
+The transmitter (kill switch, mode switch) always stays the primary safety device.
 
 ---
 
-## Phase 4: ROS2 Connector & Domain Bridge
+## DroneLab Demo (simulation for visitors)
 
-The Connector bridges MAVLink messages to ROS2 topics, enforces flight boundary checks, and isolates the student network (Domain 0) from the drone network (Domain 11) using `domain_bridge`.
+Tap **DroneLab Demo**. It starts Gazebo, ArduCopter SITL and the same safety gate (fence =
+the arena), then shows the pilot screen on the Deck and Gazebo's chase camera on the second screen
+(if one is connected).
 
-To run the wrapper for real drones, use the C++ GUI or run the wrapper launch file directly:
-```bash
-ros2 launch drone_wrapper_pkg drone_wrapper.launch.py namespace:=/drones/edu11 tgt_system:=11
-```
-Follow the GUI/terminal prompts to select the specific drone you want to communicate with. You can now subscribe to and publish ROS2 messages on your personal PC on `ROS_DOMAIN_ID=0`.
+| Gamepad | Keyboard | Action |
+|---|---|---|
+| A / Start | Space | take off (and start the race timer) |
+| B | L | land |
+| X | R | reset: drone back on the pad (also automatic after a crash) |
+| Y | Tab | race ↔ free flight |
+| View/Back | Esc | beginner ↔ expert speed |
+| left stick | ↑ ↓ ← → | climb/descend, turn |
+| right stick | W A S D | forward/back, left/right |
+| right trigger | Shift | boost (expert) |
 
----
+**Race:** fly through the 8 coloured gates in order (HUD brackets the next gate, minimap shows the
+course), then land on the H pad; the time stops at touchdown and goes to the leaderboard
+(`var/leaderboard.json`, rename/clear via ☰). The invisible fence is the real gate code slowing the
+drone down; visitors can't fly out of the arena.
 
-## Phase 5: Transmitter Binding & Pre-Flight
+Students can use the running simulation exactly like a real drone: `/drone1/...` on ROS_DOMAIN_ID 0,
+plus `/drone1/camera/image_raw`.
 
-Each drone is paired with a specific transmitter. Reference the map below:
-
-| Drone ID | Transmitter |
-|----------|-------------|
-| Drone 10 | TX1         |
-| Drone 11 | TX3         |
-| Drone 13 | TX2         |
-| Drone 15 | TX1         |
-| Drone 17 | TX2         |
-| Drone 18 | TX3         |
-| Drone 19 | TX3         |
-
-### Receiver LED Status Guide
-While the drone is booting, you must bind it to the transmitter. Look at the small green LED on the back of the drone:
-- **Slow Blinking:** Ready to bind.
-- **Fast Blinking:** Creating configuration hotspot.
-- **Static Solid:** Successfully bound to transmitter.
+The arena is generated from `sim/course/arena.yaml` (gates, buildings, trees, fence) by
+`python3 tools/gen_arena.py`; the minimap and race logic read the same file.
 
 ---
 
-## Phase 6: Flight Operations
+## Testing
 
-Once all setup steps are complete and the LED is solid green, the drone is ready to fly.
+* `python3 -m pytest tests` – fence geometry, command validation, discovery (against pymavlink frames),
+  race logic, config consistency (49 tests, no ROS needed).
+* `scripts/dronelab.sh selftest` – headless end-to-end run in the container: Gazebo + ArduCopter SITL +
+  MAVROS behind the gate, flown through the student API. Checks isolation, arming/takeoff rules, wall
+  slow-down, the 0.5 s hover watchdog, rejected setpoints, feed-forward removal, mode rules, breach → LAND
+  + lock, release, landing. Takes ~4 min; stop the Demo first.
 
-### Flight Controls & Arming
-
-**IMPORTANT:** On real drones you **cannot** arm in GUIDED mode. You must arm in **LOITER** mode first.
-
-The connector enforces this sequence automatically – it will reject arming in GUIDED and reject switching to GUIDED before arming.
-
-#### Manual Arming (Transmitter)
-1. Switch **SE** to **LOITER** mode.
-2. Toggle **SF Switch** to arm. Keep it armed.
-3. Move throttle to mid-stick (0% mixer) for takeoff.
-4. Once airborne and stable, switch **SE** to **GUIDED** for ROS2 position control.
-
-#### ROS2 Arming & Takeoff (Command Line)
-
-Replace `drone11` with your drone namespace.
-
-**Step 1 – Arm and Takeoff Sequence:**
-The new `arming_node` simplifies the takeoff process. By calling the custom arming service, the drone automatically switches to LOITER, arms, and switches to GUIDED mode.
-```bash
-ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
-```
-
-**Step 2 – Send position setpoints:**
-Once armed and in GUIDED mode, you must stream position commands continuously to take off and move.
-```bash
-ros2 topic pub --rate 20 /drone11/setpoint_position/local \
-  geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 0.0, z: 1.5}, orientation: {w: 1.0}}}"
-```
-
-**Step 3 – Land/Disarm:**
-Send a `CommandBool "{value: false}"` to the arming service to land/disarm.
-```bash
-ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
-```
-
----
-
-## Phase 7: Sending Position Commands via ROS2
-
-### Architecture
-
-All student communication goes through the **domain bridge** and **safety validation node**. Students never interact with MAVROS directly. The wrapper validates setpoints and enforces flight boundaries.
-
-- **Student Network**: `ROS_DOMAIN_ID=0`
-- **Drone Network**: `ROS_DOMAIN_ID=11` (or respective drone ID)
+## Files
 
 ```
-Student PC (Domain 0) ──► Validation Node ──► Domain Bridge ──► MAVROS (Domain 11) ──► Drone
+scripts/dronelab.sh            host launcher (podman/docker), used by the desktop icons
+scripts/in-container.sh        environment inside the container
+config/dronelab.yaml           network discovery, fence profiles, limits, demo settings
+dronelab/                      Python package (no colcon build needed)
+  gate/                        safety gate (one process per drone, starts MAVROS)
+  safety.py, geo.py            fence + command validation (pure Python, unit tested)
+  discovery.py, mavlink_lite.py   drone discovery
+  gui/flight_app.py, gui/demo_app.py
+  sim/stack.py, sim/race.py    simulation processes, race logic
+sim/                           Gazebo world, drone model with FPV camera, SITL params, course
+tests/                         pytest (python3 -m pytest tests)
+legacy/                        the previous per-process launchers (unused)
+var/                           logs, leaderboard (not in git)
 ```
 
-### Student Topics (Domain 0)
+Logs: `var/logs/` (`gate-<ID>.log`, `mavros-<ID>.log`, `gzserver.log`, `sitl.log`, app logs), also
+from the apps' menus.
 
-These topics are bridged from the drone to the student:
+## Troubleshooting
 
-| Topic | Type | Direction | Purpose |
-|-------|------|-----------|---------|
-| `/drone11/setpoint_position/local` | `PoseStamped` | **Publish** | Position commands (safety-checked) |
-| `/drone11/odom` | `NavSatFix` | Subscribe | Current drone position / Odometry |
-| `/drone11/state` | `mavros_msgs/State` | Subscribe | Drone state (armed, mode) |
-| `/drone11/battery` | `sensor_msgs/BatteryState` | Subscribe | Battery voltage/percentage |
-| `/drone11/gps` | `sensor_msgs/NavSatFix` | Subscribe | Global position |
-
-### Student Services (Domain 0)
-
-The complex arming sequence is abstracted behind a single service call provided by the `arming_node`.
-
-| Service | Type | Purpose |
-|---------|------|---------|
-| `/drone11/cmd/arming` | `CommandBool` | `true` executes LOITER -> ARM -> GUIDED sequence. `false` sends disarm command. |
-
-> **Note:** MAVROS raw services are hidden behind Domain 11 and not natively accessible to students on Domain 0. Always use the `/drone11/cmd/arming` for validated operations.
-
-### Example: Full Flight Sequence
-
-```bash
-# 1. Monitor state
-ros2 topic echo /drone11/state
-
-# 2. Arm and enter GUIDED mode
-ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
-
-# 3. Takeoff to 1.5m by sending position setpoint (continuous stream required for GUIDED)
-ros2 topic pub --rate 20 /drone11/setpoint_position/local \
-  geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: 0.0, y: 0.0, z: 1.5}, orientation: {w: 1.0}}}"
-
-# 4. Disarm / Land
-ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: false}"
-```
-
-### Monitoring Commands
-
-```bash
-# Current position
-ros2 topic echo /drone11/odom
-
-# Battery
-ros2 topic echo /drone11/battery
-```
-
-### Connector Configuration
-
-The bounds configuration can be managed via the `drone_wrapper_pkg` boundaries yaml:
-
-```yaml
-x_min: -0.5
-x_max: 4.0
-y_min: -0.5
-y_max: 6.0
-z_min: 0.5
-z_max: 2.5
-```
-
-### Adding New Topics (Domain Bridging)
-
-If you need to expose additional MAVROS topics (like IMU data or camera triggers) to the student network in the future, you must update the Domain Bridge YAML configurations located in `drone_wrapper_pkg/config/`:
-
-1. **Drone to Student (Telemetry):** Edit `domain_bridge_topics.yaml`
-   Add the internal MAVROS topic under the `topics` dictionary and use `remap` to expose it cleanly to students.
-   ```yaml
-   topics:
-     /drones/edu11/mavros_node/imu/data:
-       type: sensor_msgs/msg/Imu
-       remap: /drone11/imu
-   ```
-
-2. **Student to Drone (Commands):** Edit `domain_bridge_topics_0_to_11.yaml`
-   If you want students to publish a new command, ensure it passes through the Python validation node first, then add the validated topic here to cross the bridge.
-   ```yaml
-   topics:
-     /drones/edu11/new_command_topic:
-       type: std_msgs/msg/String
-   ```
-*Note: After modifying these YAML files, you must rebuild the workspace `colcon build` and restart the Connector container to apply changes.*
-
----
-
-## 🚨 Emergency Procedures
-
-If you lose control or the drone behaves erratically, immediately execute one of the following:
-
-1. **Kill Switch:** Toggle the **SF Switch** to disarm the motors immediately.
-2. **Manual Override:** Switch the **SE Switch** back to `ALT_HOLD` and take manual control of the drone using the transmitter sticks.
-
-*You are now ready to publish movement commands via ROS on your PC!*
+* **No drone found** – check the Deck's IP (top bar) is in the drone's subnet; `ip a` in DroneLab Shell;
+  on the drone `systemctl status mavlink-router`. Use Manual connection with the drone's IP.
+* **"ports already in use"** – another MAVROS/QGroundControl holds them (`scripts/dronelab.sh stop`
+  stops everything in the container).
+* **Gate exits right away** – Flight app shows the log tail; usually MAVROS missing in the image or a
+  config error (`config/dronelab.yaml` is validated at start).
+* **Demo is slow** – Gazebo needs the GPU: the launcher passes `/dev/dri`; check `glxinfo -B` in DroneLab
+  Shell shows AMD, not llvmpipe. Close the chase view (☰) if needed.
+* **No gamepad in the Demo** – start it from Steam (see Install) or plug in a pad; the status line in the
+  bottom right says what was detected.
+* **Reset takes ~10-20 s** – that is ArduPilot's EKF accepting the jump back to the pad.
+* **Gazebo chase view covers the pilot screen** – it only opens automatically with a second screen
+  (`demo.show_gazebo: auto`); ☰ → *Show Gazebo chase view* forces it.

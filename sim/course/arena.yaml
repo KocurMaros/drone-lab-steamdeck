@@ -1,0 +1,47 @@
+# DroneLab demo arena. Single source of truth for the Gazebo world
+# (tools/gen_arena.py writes sim/worlds/dronelab_arena.world from it) and
+# for the Demo app (minimap, gate detection, race timing).
+#
+# All coordinates are MAVROS local ENU metres (x = east, y = north, z = up)
+# with the origin at the landing pad, where the drone spawns facing north.
+# Yaw is the ENU heading the drone should fly THROUGH a gate (0 = east, 90 = north).
+
+name: DroneLab Arena
+home: {lat: 48.1508457, lon: 17.0727297, alt_amsl: 140.0}   # FEI STU, Bratislava
+fence: {x: [-28, 28], y: [-38, 38], z: [0.5, 14.0]}       # keep in sync with fence_profiles.sim_arena
+pad: {x: 0.0, y: 0.0, radius: 2.0}
+
+gates:   # flown in this order, then land on the pad
+  - {x: 0.0,   y: 12.0,  z: 2.5, yaw: 90,  color: [1.00, 0.27, 0.20]}
+  - {x: 12.0,  y: 26.0,  z: 4.0, yaw: 20,  color: [1.00, 0.60, 0.10]}
+  - {x: 22.0,  y: 14.0,  z: 6.0, yaw: -90, color: [1.00, 0.88, 0.15]}
+  - {x: 21.0,  y: -8.0,  z: 3.0, yaw: -90, color: [0.25, 0.85, 0.35]}
+  - {x: 8.0,   y: -24.0, z: 5.0, yaw: 180, color: [0.15, 0.85, 0.85]}
+  - {x: -12.0, y: -28.0, z: 8.0, yaw: 150, color: [0.25, 0.55, 1.00]}
+  - {x: -22.0, y: -10.0, z: 4.0, yaw: 90,  color: [0.62, 0.40, 1.00]}
+  - {x: -16.0, y: 10.0,  z: 2.5, yaw: 45,  color: [1.00, 0.35, 0.75]}
+gate_size: {width: 3.0, height: 3.0, bar: 0.2}
+
+buildings:   # solid: crashing into them is part of the fun (RESET puts the drone back)
+  - {x: 13.0,  y: 2.0,   w: 8.0, d: 8.0, h: 10.0, material: Gazebo/Bricks}
+  - {x: -4.0,  y: -14.0, w: 10.0, d: 6.0, h: 14.0, material: Gazebo/Grey}
+  - {x: -21.0, y: 25.0,  w: 6.0, d: 9.0, h: 6.0, material: Gazebo/Wood}
+
+towers:
+  - {x: -12.0, y: 34.0, r: 0.6, h: 18.0}
+
+roads:      # flat, decoration only (w = east-west size, d = north-south size)
+  - {x: 6.0, y: 0.0, w: 4.0, d: 120.0}
+  - {x: 0.0, y: -32.0, w: 120.0, d: 4.0}
+
+trees:
+  - [10, 10]
+  - [-8, 5]
+  - [17, 34]
+  - [-25, 33]
+  - [25, -31]
+  - [-25, -34]
+  - [3, -34]
+  - [-6, 25]
+  - [26, 22]
+  - [-12, -4]
