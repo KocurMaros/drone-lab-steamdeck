@@ -7,7 +7,9 @@
 #   dronelab.sh build    (re)build the container image
 #   dronelab.sh stop     stop the container (all apps and gates)
 #   dronelab.sh status   show engine / image / container state
-#   dronelab.sh selftest headless simulation test of the safety gate (~4 min, stop the Demo first)
+#   dronelab.sh selftest headless simulation test of the safety gate (~6 min, stop the Demo first)
+#   dronelab.sh square [--drone N] [--alt 3] [--side 3] [--speed 1]
+#                        take off, fly a square, land (asks for the drone without --drone)
 #
 # The container keeps running in the background so the next start is instant.
 set -u
@@ -118,6 +120,32 @@ case "${1:-flight}" in
         start_container; allow_x
         if [ -t 1 ]; then exec $ENGINE exec -it "$NAME" /opt/dronelab/scripts/in-container.sh --shell
         else exec konsole -e $ENGINE exec -it "$NAME" /opt/dronelab/scripts/in-container.sh --shell; fi ;;
+    square)
+        shift
+        args=("$@")
+        if [[ " ${args[*]} " != *" --drone "* ]]; then
+            if command -v kdialog >/dev/null; then
+                id=$(kdialog --title "DroneLab square demo" --inputbox "Which drone?
+
+1 = the simulated drone (start DroneLab Demo first)
+10, 11, ... = a real drone connected in DroneLab Flight" 1) || exit 0
+            else
+                read -r -p "Which drone (1 = simulator)? [1] " id
+            fi
+            [[ "${id:-1}" =~ ^[0-9]+$ ]] || fail "not a drone number: $id"
+            args+=(--drone "${id:-1}")
+        fi
+        if [[ " ${args[*]} " != *" --yes "* ]] && command -v kdialog >/dev/null; then
+            kdialog --title "DroneLab square demo" --warningcontinuecancel "The drone takes off to 3 m (lower if the fence
+ceiling is lower), flies a 3 x 3 m square where it fits inside the fence, comes back and LANDS.
+
+Make sure the area is clear. Take over any time with the RC flight-mode switch (LOITER):
+the demo stops immediately. Ctrl+C in the terminal window lands the drone." || exit 0
+            args+=(--yes)
+        fi
+        start_container
+        if [ -t 0 ]; then exec $ENGINE exec -it "$NAME" /opt/dronelab/scripts/in-container.sh --exec python3 -m dronelab.demos.square "${args[@]}"
+        else exec $ENGINE exec "$NAME" /opt/dronelab/scripts/in-container.sh --exec python3 -m dronelab.demos.square "${args[@]}"; fi ;;
     selftest)
         start_container
         exec $ENGINE exec "$NAME" /opt/dronelab/scripts/in-container.sh --exec python3 tools/e2e_sim_test.py ;;
@@ -136,5 +164,5 @@ Connected real drones lose the fence. Only do this when no drone is flying." || 
         echo "image:     $IMAGE ($(image_ok && echo "version $IMAGE_VERSION OK" || echo "missing/outdated"))"
         echo "container: $NAME ($(running && echo running || echo stopped))"
         echo "repo:      $REPO" ;;
-    *) sed -n '2,13p' "$0"; exit 2 ;;
+    *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

@@ -9,6 +9,9 @@ from __future__ import annotations
 import argparse
 import collections
 import math
+import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -524,6 +527,8 @@ class DemoWindow(QMainWindow):
         self._crash_t = None
         self._last_armed = False
         self._was_flying = False
+        self.auto: Optional[subprocess.Popen] = None      # the square autopilot (AUTO state)
+        self.auto_line = ""
         self._build()
         try:
             self.ros = RosLink(self.stack.student_domain, d.get("camera_topic", f"{NS}/camera/image_raw"))
@@ -613,7 +618,8 @@ class DemoWindow(QMainWindow):
         dlg.setMinimumWidth(520)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(20, 20, 20, 20)
-        items = [("Show Gazebo chase view", lambda: self.stack.start_view()),
+        items = [("Autopilot: 3 x 3 m square (B stops it)", self._auto_square),
+                 ("Show Gazebo chase view", lambda: self.stack.start_view()),
                  ("Restart simulation", self._restart_sim),
                  ("Rename last pilot…", self._rename_last),
                  ("Clear leaderboard", self._clear_board),
@@ -624,6 +630,42 @@ class DemoWindow(QMainWindow):
             b.clicked.connect(lambda _=False, f=fn: (dlg.accept(), f()))
             lay.addWidget(b)
         dlg.exec_()
+
+    # ---------------------------------------------------------------- autopilot square
+    def _auto_square(self):
+        if self.state not in ("READY", "FINISHED", "FLYING"):
+            self.show_flash("Autopilot needs a ready or flying drone", theme.WARN)
+            return
+        env = dict(os.environ)
+        env.pop("CYCLONEDDS_URI", None)
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            self.auto = subprocess.Popen([sys.executable, "-m", "dronelab.demos.square", "--drone", "1", "--yes",
+                                          "--hold", "0.5"], cwd=repo, env=env, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        except OSError as e:
+            self.show_flash(f"Autopilot failed: {e}", theme.BAD, 4)
+            return
+        self.auto_line = "starting"
+
+        def pump(p=self.auto):
+            for line in p.stdout:
+                line = line.rstrip()
+                print("[square] " + line, flush=True)
+                self.auto_line = line.split(" ", 1)[-1] if line[:2].isdigit() else line
+        threading.Thread(target=pump, daemon=True).start()
+        self.race_mode = False
+        self.race.reset()
+        self.b_mode.setText("FREE  (Y)")
+        self.set_state("AUTO")
+
+    def _stop_auto(self, kill=False):
+        p = self.auto
+        if p is not None and p.poll() is None:
+            if kill:
+                p.kill()
+            else:
+                p.send_signal(signal.SIGINT)      # the demo lands the drone
 
     def _restart_sim(self):
         if Confirm.ask(self, "Restart simulation?", "Gazebo, ArduPilot and MAVROS are restarted (~1 minute).",
@@ -675,6 +717,8 @@ class DemoWindow(QMainWindow):
             return hint, theme.OK
         if s == "STARTING":
             return "TAKING OFF…", theme.WARN
+        if s == "AUTO":
+            return f"AUTOPILOT: 3 x 3 m SQUARE\n{self.auto_line[:60]}\nB = stop and land", theme.ACCENT
         if s == "CRASHED":
             return "CRASH! resetting…", theme.BAD
         if s == "RESETTING":
@@ -693,7 +737,10 @@ class DemoWindow(QMainWindow):
             elif s == "WAITING":
                 self.show_flash("Drone not ready yet - wait a few seconds", theme.WARN)
         elif b == "b":
-            if s in ("FLYING", "STARTING"):
+            if s == "AUTO":
+                self._stop_auto()
+                self.set_state("LANDING")
+            elif s in ("FLYING", "STARTING"):
                 self._admin_async("land", lock=False)
                 self.set_state("LANDING")
         elif b == "x":
@@ -744,6 +791,7 @@ class DemoWindow(QMainWindow):
     def _reset(self):
         if self._busy:
             return
+        self._stop_auto(kill=True)
         self._busy = True
         self.set_state("RESETTING")
         self.race.reset()
@@ -853,9 +901,15 @@ class DemoWindow(QMainWindow):
                 self.set_state("READY")
         elif s == "FINISHED":
             pass
+        elif s == "AUTO":
+            if self.auto is None or self.auto.poll() is not None:
+                rc = self.auto.returncode if self.auto else None
+                if rc not in (0, None):
+                    self.show_flash("Autopilot stopped: " + self.auto_line[:50], theme.WARN, 4)
+                self.set_state("FLYING" if armed and not on_ground else ("LANDING" if armed else "READY"))
 
         # ---- crash detection
-        if pose is not None and s in ("FLYING", "STARTING", "LANDING"):
+        if pose is not None and s in ("FLYING", "STARTING", "LANDING", "AUTO"):
             roll, pitch, _ = quat_to_rpy(pose[1])
             tilted = abs(roll) > math.radians(65) or abs(pitch) > math.radians(65)
             dropped = self._last_armed and not armed and z > 0.8
@@ -922,7 +976,7 @@ class DemoWindow(QMainWindow):
         extra = f"\n{warn[-1]}" if warn else ""
         self.l_status.setText(f"{pad}\nskill: {'EXPERT' if self.expert else 'BEGINNER'} · state {self.state}{extra}")
         self.b_start.setEnabled(self.state in ("READY", "FINISHED"))
-        self.b_land.setEnabled(self.state in ("FLYING", "STARTING"))
+        self.b_land.setEnabled(self.state in ("FLYING", "STARTING", "AUTO"))
 
     # ---------------------------------------------------------------- keys / close
     _QT_KEYS = {Qt.Key_Space: "space", Qt.Key_Up: "up", Qt.Key_Down: "down", Qt.Key_Left: "left",
@@ -946,6 +1000,7 @@ class DemoWindow(QMainWindow):
         return False  # keep Tab for the mode toggle
 
     def closeEvent(self, e):
+        self._stop_auto(kill=not self.args.no_sim)
         if not self.args.no_sim:
             self.stack.stop()
         if self.ros:

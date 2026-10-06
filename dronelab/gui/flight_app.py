@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Dict, Optional
 
@@ -36,6 +39,12 @@ class GateHandle:
         self.path = path
         self.started = time.monotonic()
         self.status: dict = {}
+        self.square: Optional[subprocess.Popen] = None     # the square demo, if running
+        self.square_lines: collections.deque = collections.deque(maxlen=200)
+
+    @property
+    def square_running(self) -> bool:
+        return self.square is not None and self.square.poll() is None
 
     @property
     def alive(self) -> bool:
@@ -124,12 +133,24 @@ class DronePanel(QWidget):
         lay = QVBoxLayout(d)
         lay.setContentsMargins(20, 20, 20, 20)
         lay.addWidget(label(f"Drone {self.h.sysid}", "h2"))
-        for text, fn in (("Show MAVROS / gate log", lambda: (d.accept(), self.app.show_log(self.h))),
-                         ("RTL (return to launch)", lambda: (d.accept(), self.app.admin(self.h, "mode", mode="RTL"))),
-                         ("Disarm (on the ground only)", lambda: (d.accept(), self.app.admin(self.h, "disarm"))),
-                         ("Disconnect (stop gate + MAVROS)", lambda: (d.accept(), self.app.disconnect(self.h))),
-                         ("Close", d.reject)):
-            b = button(text, min_h=60)
+        st = self.h.status
+        if self.h.square_running:
+            sq = ("STOP square demo (lands)", lambda: (d.accept(), self.app.stop_square(self.h)))
+        else:
+            sq = ("Fly 3 x 3 m square demo...", lambda: (d.accept(), self.app.fly_square(self.h)))
+        n_warn = len(st.get("param_warnings") or [])
+        items = [sq,
+                 ("GUIDED - give control back to students",
+                  lambda: (d.accept(), self.app.admin(self.h, "mode", mode="GUIDED"))),
+                 (f"Drone parameters (RC takeover, failsafes){f'  -  {n_warn} warnings' if n_warn else ''}...",
+                  lambda: (d.accept(), self.app.params_dialog(self.h))),
+                 ("Show MAVROS / gate log", lambda: (d.accept(), self.app.show_log(self.h))),
+                 ("RTL (return to launch)", lambda: (d.accept(), self.app.admin(self.h, "mode", mode="RTL"))),
+                 ("Disarm (on the ground only)", lambda: (d.accept(), self.app.admin(self.h, "disarm"))),
+                 ("Disconnect (stop gate + MAVROS)", lambda: (d.accept(), self.app.disconnect(self.h))),
+                 ("Close", d.reject)]
+        for text, fn in items:
+            b = button(text, min_h=56)
             b.clicked.connect(fn)
             lay.addWidget(b)
         d.exec_()
@@ -139,7 +160,11 @@ class DronePanel(QWidget):
             self.t_link.set("starting…" if link_ok else "NO GATE", theme.WARN if link_ok else theme.BAD)
             return
         mode = st.get("mode") or "-"
-        self.t_mode.set(mode, theme.ACCENT if mode == "GUIDED" else theme.TEXT)
+        pilot = st.get("pilot_control")
+        if pilot:
+            self.t_mode.set(f"{mode} (RC)", theme.WARN)
+        else:
+            self.t_mode.set(mode, theme.ACCENT if mode == "GUIDED" else theme.TEXT)
         armed = st.get("armed")
         ls = LANDED.get(st.get("landed_state", 0), "?")
         self.t_arm.set(("ARMED · " if armed else "disarmed · ") + ls, theme.WARN if armed else theme.TEXT)
@@ -174,6 +199,16 @@ class DronePanel(QWidget):
         if st.get("locked"):
             warn.append(f"LOCKED: {st.get('lock_reason')}. Student commands are blocked until you press "
                         f"RELEASE LOCK.")
+        if pilot:
+            warn.append(f"RC PILOT HAS CONTROL ({pilot}): student commands are ignored and the gate does not "
+                        f"enforce its fence. Give it back with ··· -> GUIDED (or a GUIDED switch position).")
+        if self.h.square_running:
+            last = self.h.square_lines[-1] if self.h.square_lines else "starting"
+            warn.append(f"SQUARE DEMO: {last}")
+        pw = st.get("param_warnings") or []
+        if pw and st.get("params_checked"):
+            warn.append(f"{len(pw)} drone parameter warning(s), e.g. {pw[0].split(':')[0]} - see ··· -> "
+                        f"Drone parameters.")
         low = st.get("connected") and st.get("pos") is not None and st.get("pose_rate", 20) < 8
         now = time.monotonic()
         self._low_rate_since = (self._low_rate_since or now) if low else None
@@ -566,6 +601,109 @@ class FlightWindow(QMainWindow):
         else:
             self.log(f"drone {h.sysid}: {cmd} {kw if kw else ''}")
 
+    # ---------------------------------------------------------------- square demo
+    def fly_square(self, h: GateHandle):
+        st = h.status
+        if not st.get("connected"):
+            self._text_dialog("Square demo", "The drone is not connected.")
+            return
+        if st.get("locked") or st.get("pilot_control"):
+            self._text_dialog("Square demo", "The drone is locked or the RC pilot has control - release / hand it "
+                                             "back first.")
+            return
+        zmax = float((st.get("fence") or {}).get("z", [0, 3.3])[1])
+        alt = min(3.0, zmax - 0.3)
+        lim = (st.get("limits") or {}).get("max_speed_xy", 1.0)
+        note = "" if alt >= 3.0 else f"\n\n3 m does not fit under the fence ceiling ({zmax:g} m): it flies at {alt:.1f} m."
+        what = "take off to" if not st.get("armed") else "go from its current position to"
+        if not Confirm.ask(self, f"Square demo - drone {h.sysid}",
+                           f"The drone will {what} {alt:.1f} m, fly a 3 x 3 m square at {min(1.0, lim):g} m/s "
+                           f"(placed where it fits in the fence), come back and LAND.{note}\n\nMake sure the area "
+                           f"is clear. Take over at any time with the RC mode switch (LOITER): the demo stops "
+                           f"immediately.", "Fly square", danger=True):
+            return
+        cmd = [sys.executable, "-m", "dronelab.demos.square", "--drone", str(h.sysid), "--yes"]
+        env = dict(os.environ)
+        env.pop("CYCLONEDDS_URI", None)
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            h.square = subprocess.Popen(cmd, cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, start_new_session=True)
+        except OSError as e:
+            self._text_dialog("Square demo", str(e))
+            return
+        h.square_lines.clear()
+        logf = procman.log_path(f"square-{h.sysid}.log")
+
+        def pump(p=h.square, lines=h.square_lines, sysid=h.sysid):
+            with open(logf, "w") as f:
+                for line in p.stdout:
+                    line = line.rstrip()
+                    lines.append(line.split(" ", 1)[-1] if line[:2].isdigit() else line)
+                    f.write(line + "\n")
+                    f.flush()
+            lines.append(f"finished (exit {p.wait()})")
+        threading.Thread(target=pump, daemon=True).start()
+        self.log(f"drone {h.sysid}: square demo started")
+
+    def stop_square(self, h: GateHandle):
+        if h.square_running:
+            h.square.send_signal(signal.SIGINT)        # the demo lands if it still flies GUIDED
+            self.log(f"drone {h.sysid}: square demo stopped (landing)")
+
+    # ---------------------------------------------------------------- drone parameters
+    def params_dialog(self, h: GateHandle):
+        st = h.status
+        d = QDialog(self)
+        d.setWindowTitle(f"Drone {h.sysid} parameters")
+        d.resize(1100, 700)
+        lay = QVBoxLayout(d)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.addWidget(label(f"Drone {h.sysid} - RC takeover and fail-safe parameters "
+                            f"({st.get('profile_label', '')})", "h2"))
+        review = st.get("param_review") or []
+        if not st.get("params_checked"):
+            text = "Parameters not read yet (MAVROS loads them a few seconds after connecting)."
+        elif not review:
+            text = "Everything looks fine."
+        else:
+            text = "\n\n".join(("WARNING  " if f["level"] == "warn" else "note     ") + f["text"] for f in review)
+        fixes = {}
+        for f in review:
+            fixes.update(f.get("fix") or {})
+        p = st.get("params") or {}
+        if fixes:
+            text += "\n\n---------- 'Fix on the drone' writes (stored permanently) ----------\n" + "\n".join(
+                f"  {k:<15} {p.get(k, '?'):g} -> {v:g}" if isinstance(p.get(k), (int, float)) else f"  {k} -> {v:g}"
+                for k, v in fixes.items())
+        text += ("\n\nTakeover in flight: move the flight-mode switch (LOITER). The gate then ignores the students "
+                 "and does not enforce its fence. Give the drone back with ··· -> GUIDED.\n"
+                 "The same values for Mission Planner: drones/params/outdoor-rc-takeover.param and "
+                 "indoor-rc-takeover.param.")
+        t = QPlainTextEdit(text)
+        t.setReadOnly(True)
+        lay.addWidget(t, 1)
+        row = QHBoxLayout()
+        b_check = button("Read again", min_h=56)
+        b_check.clicked.connect(lambda: (self.admin(h, "check_params"), d.accept()))
+        b_fix = button("Fix on the drone", "primary", 56)
+        b_fix.setEnabled(bool(fixes) and not st.get("armed"))
+        if st.get("armed"):
+            b_fix.setText("Fix on the drone (disarm first)")
+
+        def fix():
+            if Confirm.ask(self, "Write parameters?", "Write these values to the flight controller now?\n\n"
+                           + "\n".join(f"{k} = {v:g}" for k, v in fixes.items()), "Write", danger=False):
+                d.accept()
+                self.admin(h, "fix_params")
+        b_fix.clicked.connect(fix)
+        b_close = button("Close", min_h=56)
+        b_close.clicked.connect(d.reject)
+        for b in (b_check, b_fix, b_close):
+            row.addWidget(b)
+        lay.addLayout(row)
+        d.exec_()
+
     def land_all(self):
         for h in self.gates.values():
             self.admin(h, "land")
@@ -661,6 +799,8 @@ class FlightWindow(QMainWindow):
                     h.client.send("shutdown", force=True)
                     if h.proc is not None:
                         procman.kill_group(h.proc, timeout=10.0)
+        for h in self.gates.values():
+            self.stop_square(h)          # never leave an autopilot script running without its window
         self.disc.stop()
         e.accept()
 

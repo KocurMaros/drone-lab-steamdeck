@@ -5,13 +5,16 @@
     python3 tools/e2e_sim_test.py --attach   # use a simulation that is already running (e.g. the Demo app)
 
 Flies the simulated drone through the STUDENT interface (/drone1/... on the student domain) and checks
-that the gate limits, rejects, hovers, and lands + locks on a fence breach.
+that the gate limits, rejects, hovers, and lands + locks on a fence breach; flies the 3 x 3 m square
+demo; simulates an RC pilot taking over (LOITER + sticks via RC override on the private domain) and
+checks that the gate never fights the pilot; reviews and fixes the ArduPilot parameters.
 """
 from __future__ import annotations
 
 import argparse
 import math
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -49,6 +52,7 @@ class Student:
         self.ctx.init(domain_id=domain)
         n = self.n = Node("e2e_student", context=self.ctx)
         self.pose = None
+        self.yaw = 0.0
         self.vel = (0, 0, 0)
         self.state = None
         self.landed = 0
@@ -76,6 +80,8 @@ class Student:
 
     def _pose(self, m):
         self.pose = (m.pose.position.x, m.pose.position.y, m.pose.position.z)
+        q = m.pose.orientation
+        self.yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
     def call(self, cli, req, timeout=15):
         if not cli.wait_for_service(timeout_sec=5):
@@ -132,6 +138,96 @@ class Student:
         return False
 
 
+class Private:
+    """Talks to MAVROS directly on the private domain - plays the RC pilot / a bypassing program."""
+
+    def __init__(self, domain):
+        xml = write_cyclone_config("e2e-private", [domain], None)
+        os.environ.update(ros_env(domain, xml))
+        from rclpy.context import Context
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.node import Node
+        from geometry_msgs.msg import PoseStamped
+        from mavros_msgs.msg import OverrideRCIn
+        from mavros_msgs.srv import SetMode
+        self.PoseStamped, self.OverrideRCIn, self.SetMode = PoseStamped, OverrideRCIn, SetMode
+        self.ctx = Context()
+        self.ctx.init(domain_id=domain)
+        n = self.n = Node("e2e_bypass", context=self.ctx)
+        self.p_sp = n.create_publisher(PoseStamped, "/mavros/setpoint_position/local", 10)
+        self.p_rc = n.create_publisher(OverrideRCIn, "/mavros/rc/override", 10)
+        self.c_mode = n.create_client(SetMode, "/mavros/set_mode")
+        self.ex = SingleThreadedExecutor(context=self.ctx)
+        self.ex.add_node(n)
+        threading.Thread(target=self.ex.spin, daemon=True).start()
+        self.sticks = None                      # (roll, pitch, throttle, yaw) PWM, streamed at 10 Hz
+        threading.Thread(target=self._rc_loop, daemon=True).start()
+
+    def _rc_loop(self):
+        while True:
+            st = self.sticks
+            if st is not None:
+                m = self.OverrideRCIn()
+                ch = [65535] * len(m.channels)          # CHAN_NOCHANGE
+                ch[:4] = [int(v) for v in st]           # 0 = CHAN_RELEASE
+                m.channels = ch
+                self.p_rc.publish(m)
+            time.sleep(0.1)
+
+    def stick_toward(self, yaw, east, north, amount=350):
+        """Sticks that move a LOITER copter with ENU heading ``yaw`` toward the ENU direction (east, north)."""
+        fwd = east * math.cos(yaw) + north * math.sin(yaw)
+        right = east * math.sin(yaw) - north * math.cos(yaw)
+        self.sticks = (1500 + amount * right, 1500 - amount * fwd, 1500, 1500)
+
+    def set_mode(self, mode):
+        if not self.c_mode.wait_for_service(timeout_sec=5):
+            return False
+        r = self.SetMode.Request()
+        r.custom_mode = mode
+        f = self.c_mode.call_async(r)
+        t0 = time.time()
+        while not f.done() and time.time() - t0 < 5:
+            time.sleep(0.02)
+        return bool(f.done() and f.result() and f.result().mode_sent)
+
+    def goto(self, x, y, z):
+        m = self.PoseStamped()
+        m.header.frame_id = "map"
+        m.pose.position.x, m.pose.position.y, m.pose.position.z = float(x), float(y), float(z)
+        m.pose.orientation.w = 1.0
+        self.p_sp.publish(m)
+
+
+class Square:
+    """The square demo as a separate process, like the desktop icon starts it."""
+
+    def __init__(self, *args):
+        env = dict(os.environ)
+        for k in ("CYCLONEDDS_URI", "ROS_DOMAIN_ID"):
+            env.pop(k, None)
+        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.p = subprocess.Popen([sys.executable, "-m", "dronelab.demos.square", "--drone", "1", "--yes", *args],
+                                  cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.lines = []
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.p.stdout:
+            self.lines.append(line.rstrip())
+            print("    square| " + line.rstrip(), flush=True)
+
+    def saw(self, text):
+        return any(text in ln for ln in self.lines)
+
+    def wait(self, timeout):
+        try:
+            return self.p.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.p.terminate()
+            return None
+
+
 def private_participant_sees_mavros(domain) -> bool:
     """A default (network) participant on the private domain must NOT discover MAVROS."""
     import subprocess
@@ -163,6 +259,40 @@ def main():
         check("FPV camera publishing", s.wait(lambda: s.images > 3, 30))
         check("isolation: network participant on private domain cannot see MAVROS",
               not private_participant_sees_mavros(ds.private_domain))
+        admin = AdminClient(ds.socket_path)
+
+        def status():
+            admin.poll()
+            return admin.last_status or {}
+        ok = s.wait(lambda: status().get("params_checked"), 60, 1.0)
+        st = status()
+        check("gate read the ArduPilot parameters", ok, f"({len(st.get('params') or {})} values, "
+              f"{len(st.get('param_warnings') or [])} warnings)")
+        check("parameter review: RC_OPTIONS overrides flagged (SITL default 0)",
+              any("RC_OPTIONS" in w for w in st.get("param_warnings") or []))
+
+        # ---- the square demo from the pad (arms, takes off, 3 x 3 m, lands)
+        track = []
+        sampling = threading.Event()
+
+        def sample():
+            while not sampling.is_set():
+                if s.pose:
+                    track.append(s.pose)
+                time.sleep(0.1)
+        threading.Thread(target=sample, daemon=True).start()
+        t0 = time.time()
+        sq = Square()
+        rc = sq.wait(240)
+        sampling.set()
+        xs, ys, zs = [p[0] for p in track], [p[1] for p in track], [p[2] for p in track]
+        check("square demo: took off, flew, landed (exit 0)", rc == 0 and sq.saw("landed and disarmed"),
+              f"(exit {rc}, {time.time() - t0:.0f} s)")
+        if track:
+            check("square demo: 3 x 3 m at 3 m", 2.6 <= max(xs) - min(xs) <= 3.5 and 2.6 <= max(ys) - min(ys) <= 3.5
+                  and 2.6 <= max(zs) <= 3.5,
+                  f"(x {min(xs):.1f}..{max(xs):.1f}, y {min(ys):.1f}..{max(ys):.1f}, max z {max(zs):.1f})")
+        s.wait(lambda: s.state and not s.state.armed, 30, 0.5)
         # ---- arm + takeoff via the student API (EKF needs up to ~60 s after SITL start)
         t0 = time.time()
         armed = False
@@ -228,37 +358,70 @@ def main():
         time.sleep(0.5)
         check("raw position+velocity: feed-forward removed", bool(s.errors_since(tt, "feed-forward")))
         check("forbidden mode (ACRO) rejected", not s.mode("ACRO"))
+        check("LOITER is the pilot's mode: students cannot select it", not s.mode("LOITER"))
 
-        # ---- breach: fly out by talking to MAVROS directly (bypassing the gate, like an RC pilot would)
-        admin = AdminClient(ds.socket_path)
+        # ---- RC pilot takeover during the square demo (in the air, at 12 m)
+        pv = Private(ds.private_domain)
+        time.sleep(2)
+        sq = Square("--alt", "12", "--no-land", "--hold", "0.5")
+        reached = s.wait(lambda: sq.saw("corner 3/4") or sq.p.poll() is not None, 90, 0.2)
+        check("square demo started in the air", reached and sq.p.poll() is None)
+        pv.sticks = (1500, 1500, 1500, 1500)              # sticks centred, throttle mid = hold altitude
+        time.sleep(0.3)
+        took = pv.set_mode("LOITER") and s.wait(lambda: s.state.mode == "LOITER", 5)
+        check("pilot: mode switch to LOITER", took)
+        rc = sq.wait(5)
+        check("square demo stops at once when the pilot takes over", rc == 2 and
+              (sq.saw("left GUIDED") or sq.saw("took over")), f"(exit {rc})")
+        ok = s.wait(lambda: status().get("pilot_control") == "LOITER", 3, 0.2)
+        check("gate status: pilot_control = LOITER", ok)
+        tt = time.monotonic()
+        check("pilot control: student GUIDED rejected", not s.mode("GUIDED"))
+        check("pilot control: student land rejected", not s.land())
+        for _ in range(10):
+            s.vel_cmd(0.0, 3.0)
+            time.sleep(0.05)
+        check("pilot control: student velocity rejected with an error",
+              bool(s.errors_since(tt, "RC pilot")) and s.state.mode == "LOITER")
+        # the pilot flies out of the fence: the gate must NOT land or lock
+        t0 = time.time()
+        maxx = s.pose[0]
+        while time.time() - t0 < 25 and s.pose[0] < 33.0:
+            pv.stick_toward(s.yaw, 1.0, 0.0)
+            maxx = max(maxx, s.pose[0])
+            time.sleep(0.1)
+        pv.sticks = (1500, 1500, 1500, 1500)
+        time.sleep(2.0)
+        st = status()
+        check("pilot flies outside the fence: no LAND, no lock", s.pose[0] > 30.0 and s.state.mode == "LOITER"
+              and not st.get("locked"), f"(x = {s.pose[0]:.1f}, fence 28 + margin 2, mode {s.state.mode})")
+        t0 = time.time()
+        while time.time() - t0 < 25 and s.pose[0] > 22.0:
+            pv.stick_toward(s.yaw, -1.0, 0.0)
+            time.sleep(0.1)
+        pv.sticks = (1500, 1500, 1500, 1500)
+        s.wait(lambda: math.hypot(*s.vel[:2]) < 0.4, 15)
+        admin.send("mode", mode="GUIDED")                  # instructor hands the drone back to the students
+        back = s.wait(lambda: s.state.mode == "GUIDED", 8)
+        pv.sticks = (0, 0, 0, 0)                           # release the override
+        check("hand back: GUIDED from the Flight app, pilot_control cleared",
+              back and s.wait(lambda: status().get("pilot_control") is None, 3, 0.2))
+        t0 = time.time()
+        while time.time() - t0 < 30 and math.dist(s.pose, (20.0, -20.0, 12.0)) > 1.0:
+            s.goto(20.0, -20.0, 12.0)
+            time.sleep(0.2)
+        check("students fly again after the hand-back", math.dist(s.pose, (20.0, -20.0, 12.0)) < 1.5)
+
+        # ---- breach: a program bypassing the gate flies out in GUIDED -> the gate lands + locks
         breach_ok = False
-        try:
-            xml = write_cyclone_config("e2e-private", [ds.private_domain], None)
-            os.environ.update(ros_env(ds.private_domain, xml))
-            from rclpy.context import Context
-            from rclpy.node import Node
-            from geometry_msgs.msg import PoseStamped
-            ctx = Context()
-            ctx.init(domain_id=ds.private_domain)
-            pn = Node("e2e_bypass", context=ctx)
-            pub = pn.create_publisher(PoseStamped, "/mavros/setpoint_position/local", 10)
-            time.sleep(2)
-            tt = time.monotonic()
-            t0 = time.time()
-            while time.time() - t0 < 40:
-                if s.state and s.state.mode == "LAND":
-                    breach_ok = True
-                    break
-                m = PoseStamped()
-                m.header.frame_id = "map"
-                m.pose.position.x, m.pose.position.y, m.pose.position.z = 45.0, -20.0, 12.0
-                m.pose.orientation.w = 1.0
-                pub.publish(m)
-                time.sleep(0.1)
-            pn.destroy_node()
-            ctx.try_shutdown()
-        except Exception as e:
-            print("bypass publisher failed:", e)
+        tt = time.monotonic()
+        t0 = time.time()
+        while time.time() - t0 < 40:
+            if s.state and s.state.mode == "LAND":
+                breach_ok = True
+                break
+            pv.goto(45.0, -20.0, 12.0)
+            time.sleep(0.1)
         check("breach: drone outside the fence -> LAND", breach_ok,
               f"(x = {s.pose[0]:.1f}, fence 28 + margin 2)")
         check("breach: error published", bool(s.errors_since(tt, "BREACH")))
@@ -270,6 +433,24 @@ def main():
         ok = s.wait(lambda: s.state and not s.state.armed, 90, 0.5)
         check("landed and disarmed", ok)
         check("extended_state streamed (landed state known)", s.landed in (1, 2, 3, 4), f"(landed_state={s.landed})")
+
+        # ---- "Fix parameters" from the Flight app (only on the ground)
+        cid = admin.send("fix_params")
+        reply = None
+        t0 = time.time()
+        while time.time() - t0 < 60 and reply is None:
+            admin.poll()
+            reply = next((r for r in admin.pop_replies() if r.get("id") == cid), None)
+            time.sleep(0.2)
+        check("fix_params written", reply and reply.get("ok"), f"({(reply or {}).get('msg', 'no reply')[:160]})")
+        time.sleep(3)
+        st = status()
+        p = st.get("params") or {}
+        check("after the fix: RC overrides ignored, GCS failsafe on, no warnings",
+              int(p.get("RC_OPTIONS", 0)) & 2 and int(p.get("FS_GCS_ENABLE", 0)) == 5
+              and int(p.get("FS_OPTIONS", 0)) & 16 and not st.get("param_warnings"),
+              f"(RC_OPTIONS={p.get('RC_OPTIONS')}, FS_GCS_ENABLE={p.get('FS_GCS_ENABLE')}, "
+              f"warnings={st.get('param_warnings')})")
     finally:
         print("\n=== SUMMARY ===")
         for name, ok, d in RESULTS:

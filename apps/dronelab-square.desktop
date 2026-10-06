@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Square Demo
+Comment=Take off to 3 m, fly a 3 x 3 m square and land (simulator or a connected real drone)
+Exec=konsole --hold -e /home/deck/Desktop/dronelab/scripts/dronelab.sh square
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-square.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

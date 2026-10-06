@@ -331,7 +331,41 @@ def test_students_cannot_leave_instructor_or_failsafe_modes():
     assert g.check_mode("GUIDED", s).ok              # the student's own landing may be aborted
     g.student_mode = ""
     assert g.check_mode("GUIDED", st(mode="LAND", armed=False)).ok is False  # GUIDED needs armed anyway
-    assert g.check_mode("LOITER", st(mode="LAND", armed=False)).ok           # on the ground: fine
+    assert g.check_mode("BRAKE", st(mode="LAND", armed=False)).ok            # on the ground: fine
+    assert not g.check_mode("LOITER", st(mode="GUIDED", armed=True)).ok      # LOITER is the RC pilot's mode
+
+
+def test_rc_pilot_takeover_blocks_students_and_breach_actions():
+    g = box_gate(breach_samples=1)
+    g.student_mode = "GUIDED"
+    pilot = st(x=6.0, y=3.0, mode="LOITER", armed=True)       # pilot switched to LOITER and flies outside
+    assert g.pilot_control(pilot) == "LOITER"
+    assert not g.check_position(Vec3(1, 1, 1), pilot, NOW).ok
+    d = g.check_velocity(Vec3(0.5, 0, 0), 0, pilot, NOW)
+    assert not d.ok and d.value is None                       # nothing is sent while the pilot flies
+    assert not g.check_raw_local(FRAME_LOCAL_NED, _mask(use_vel=True), Vec3(0, 0, 0), Vec3(1, 0, 0), 0, pilot,
+                                 NOW).ok
+    assert not g.check_mode("GUIDED", pilot).ok
+    assert not g.check_mode("LAND", pilot).ok
+    assert not g.check_land(pilot).ok
+    assert not g.check_arm(False, pilot).ok
+    assert not g.check_takeoff(1.5, pilot).ok
+    assert g.update_breach(pilot, NOW) is None and not g.locked   # the gate never fights the pilot
+    # pilot hands control back with the mode switch -> students and fence monitoring are back
+    back = st(x=6.0, y=3.0, mode="GUIDED", armed=True)
+    assert g.pilot_control(back) is None
+    assert g.update_breach(back, NOW) and g.locked
+
+
+def test_student_and_gate_modes_are_not_pilot_takeover():
+    g = box_gate()
+    g.student_mode = "LOITER"                 # e.g. the arming sequence's LOITER step
+    assert g.pilot_control(st(mode="LOITER")) is None
+    assert g.pilot_control(st(mode="GUIDED")) is None
+    assert g.pilot_control(st(mode="ALT_HOLD", armed=False)) is None   # disarmed: nobody flies
+    g.lock("instructor selected LAND")
+    assert g.pilot_control(st(mode="LAND")) is None                   # locked: instructor owns it
+    assert g.check_land(st(mode="GUIDED")).ok
 
 
 def test_default_modes_exclude_rtl_and_always_include_land():
@@ -362,6 +396,8 @@ def test_config_validation(tmp_path):
     cfg = Config(data)
     assert "RTL" not in cfg.drone(11).rules.allowed_modes
     assert "RTL" in cfg.drone(11, "outdoor_field").rules.allowed_modes
+    for prof in (None, "outdoor_field", "sim_arena"):
+        assert "LOITER" not in cfg.drone(11, prof).rules.allowed_modes     # LOITER belongs to the RC pilot
     data["limits"]["decel"] = -1
     with pytest.raises(ValueError):
         Config(data).drone(11)

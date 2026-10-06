@@ -62,10 +62,11 @@ gate:
   breach_action: land
   breach_samples: 3                   # consecutive out-of-fence poses before acting
   # Modes students may select (a profile can override this). Not RTL indoors: it climbs to
-  # RTL_ALT (15 m on the lab drones) at full speed. Not ALT_HOLD/POSHOLD: they need RC sticks.
-  # LAND is always allowed. Modes chosen by the instructor (Flight app buttons), the RC or a
-  # failsafe (LAND/RTL/BRAKE) cannot be left by students while the drone is armed.
-  allowed_modes: [GUIDED, LOITER, LAND, BRAKE]
+  # RTL_ALT (15 m on the lab drones) at full speed. Not LOITER/POSHOLD/ALT_HOLD: those are the RC
+  # pilot's modes - when the drone is in a mode that neither the students nor the Deck chose (the
+  # pilot moved the mode switch, or a failsafe), the gate rejects every student command and stops
+  # enforcing the fence until the drone is back in GUIDED. LAND is always allowed.
+  allowed_modes: [GUIDED, LAND, BRAKE]
   error_rate_hz: 2.0                  # max error messages per second per error type
   status_rate_hz: 2.0
 
@@ -110,7 +111,7 @@ fence_profiles:
     margin_m: 3.0
     # The Flight app shows a warning and asks for confirmation while this is false.
     verified: false
-    allowed_modes: [GUIDED, LOITER, LAND, BRAKE, RTL]
+    allowed_modes: [GUIDED, LAND, BRAKE, RTL]
     limits: {max_speed_xy: 3.0, max_speed_z: 1.0, lookahead_s: 1.5, decel: 2.0, stop_buffer_m: 1.0}
 
   sim_arena:
@@ -125,7 +126,7 @@ fence_profiles:
     z: [0.5, 14.0]
     margin_m: 2.0
     verified: true
-    allowed_modes: [GUIDED, LOITER, LAND, BRAKE, RTL]
+    allowed_modes: [GUIDED, LAND, BRAKE, RTL]
     limits: {max_speed_xy: 6.0, max_speed_z: 2.5, max_yaw_rate_deg: 90, lookahead_s: 1.5, decel: 3.0,
              pose_timeout_s: 1.0, stop_buffer_m: 1.0}
 

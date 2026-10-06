@@ -46,6 +46,10 @@ class SimStack:
         env["GAZEBO_MODEL_PATH"] = ":".join(p for p in paths if os.path.isdir(p)) + \
             (":" + env["GAZEBO_MODEL_PATH"] if env.get("GAZEBO_MODEL_PATH") else "")
         env["GAZEBO_MODEL_DATABASE_URI"] = ""   # never hang trying to download models
+        # server and client run on this machine: talk over loopback, so a Wi-Fi change (new IP) during a
+        # demo cannot cut the Gazebo window off
+        env["GAZEBO_IP"] = "127.0.0.1"
+        env["GAZEBO_MASTER_URI"] = "http://127.0.0.1:11345"
         if os.path.isfile("/usr/share/gazebo/setup.sh"):
             env.setdefault("GAZEBO_RESOURCE_PATH", "/usr/share/gazebo-11")
             env.setdefault("GAZEBO_PLUGIN_PATH", "/usr/lib/x86_64-linux-gnu/gazebo-11/plugins")

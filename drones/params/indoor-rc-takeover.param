@@ -1,0 +1,21 @@
+# DroneLab - INDOOR parameters for RC takeover + fail-safes (ArduCopter 4.x, OptiTrack lab)
+#
+# Same idea as outdoor-rc-takeover.param, but every fail-safe LANDs (no RTL under a ceiling).
+# Flight app -> drone card -> "..." menu -> "Drone parameters..." -> "Fix on the drone" writes the same values
+# computed from the drone's current ones (switch to the indoor fence profile first).
+
+# Only the real transmitter can fly the drone: ignore MAVLink RC_CHANNELS_OVERRIDE (544 + 2).
+RC_OPTIONS,546
+
+# Deck / Wi-Fi lost for 5 s during a GUIDED (student) flight -> LAND,
+# but a pilot flying LOITER/POSHOLD/ALT_HOLD is not interrupted (FS_OPTIONS 16).
+FS_GCS_ENABLE,5
+FS_OPTIONS,16
+FS_GCS_TIMEOUT,5
+SYSID_MYGCS,255
+
+# Transmitter lost -> LAND
+FS_THR_ENABLE,3
+
+# Position targets fly at most 1 m/s (= the gate's indoor velocity limit). NOTE: RTL also uses it.
+WPNAV_SPEED,100

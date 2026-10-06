@@ -1,0 +1,44 @@
+# DroneLab - OUTDOOR parameters for RC takeover + fail-safes (ArduCopter 4.x)
+#
+# Only the safety-relevant parameters; tuning, sensors and your flight-mode switch stay as they are.
+# Easiest: Flight app -> drone card -> "..." menu -> "Drone parameters..." -> "Fix on the drone" (computes the
+# same values from the drone's current ones, e.g. keeps the other RC_OPTIONS bits).
+# Or load this file in Mission Planner (Config -> Full Parameter List -> Load from file -> Write Params)
+# or MAVProxy (param load outdoor-rc-takeover.param).
+#
+# How the takeover works: move the flight-mode switch (channel 8 on the lab drones:
+# POSHOLD / RTL / LOITER / ALT_HOLD / ALT_HOLD / LOITER) and you fly normally. The gate sees a mode it
+# did not choose, ignores all student commands and does not enforce its fence while you fly.
+# ArduPilot only reacts to switch CHANGES: if the switch already sits on LOITER while the drone flies
+# GUIDED, flick it to another position and back. Hand the drone back to the students with the Flight
+# app's "GUIDED -> students" button (no switch position is GUIDED).
+
+# Only the real transmitter can fly the drone: ignore MAVLink RC_CHANNELS_OVERRIDE.
+# 546 = 544 (lab drones: 32 throttle arming check + 512 ELRS message) + 2 (ignore MAVLink overrides)
+RC_OPTIONS,546
+
+# Deck / Wi-Fi lost for 5 s during a GUIDED (student) flight -> RTL.
+# FS_OPTIONS 16: ... but NOT when the pilot flies LOITER/POSHOLD/ALT_HOLD (continue).
+# Without a GCS ever connected (RC-only flights) the GCS failsafe stays inactive.
+FS_GCS_ENABLE,1
+FS_OPTIONS,16
+FS_GCS_TIMEOUT,5
+# MAVROS on the Deck identifies as system 255; the GCS failsafe watches this id.
+SYSID_MYGCS,255
+
+# Transmitter lost -> RTL (the lab drones have 3 = LAND, also fine on an open field).
+FS_THR_ENABLE,1
+
+# ArduPilot's own fence as a backstop BEHIND the gate's polygon (works without the Deck, also
+# when the pilot flies): circle around the take-off point + max altitude, breach -> RTL.
+# FENCE_RADIUS must be LARGER than your field (the gate's polygon), FENCE_ALT_MAX above its ceiling.
+FENCE_ENABLE,1
+FENCE_TYPE,3
+FENCE_RADIUS,150
+FENCE_ALT_MAX,40
+FENCE_ACTION,1
+
+# RTL altitude (cm) below the gate's ceiling (outdoor_field alt_rel_m max 30 m).
+RTL_ALT,1500
+# Speed of position targets and RTL (cm/s) = the gate's outdoor velocity limit (3 m/s).
+WPNAV_SPEED,300

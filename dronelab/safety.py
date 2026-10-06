@@ -40,7 +40,6 @@ FRAME_GLOBAL_REL_ALT_INT = 6
 FRAME_GLOBAL_TERRAIN_ALT_INT = 11
 
 LANDED_UNDEFINED, LANDED_ON_GROUND, LANDED_IN_AIR, LANDED_TAKEOFF, LANDED_LANDING = 0, 1, 2, 3, 4
-PROTECTED_MODES = ("LAND", "RTL", "BRAKE", "SMART_RTL")
 
 # zero-velocity hover in the local frame (velocity + yaw-rate used, everything else ignored)
 HOVER_RAW = dict(frame=1, type_mask=1 | 2 | 4 | 64 | 128 | 256 | 1024, pos=Vec3(0, 0, 0), vel=Vec3(0, 0, 0),
@@ -371,7 +370,7 @@ class Rules:
     guided_requires_armed: bool = True
     # RTL climbs to RTL_ALT and flies at WPNAV speed (ignores the gate) -> not allowed indoors by default;
     # ALT_HOLD/POSHOLD need RC sticks, students have none.
-    allowed_modes: List[str] = field(default_factory=lambda: ["GUIDED", "LOITER", "LAND", "BRAKE"])
+    allowed_modes: List[str] = field(default_factory=lambda: ["GUIDED", "LAND", "BRAKE"])
     breach_action: str = "land"               # land | brake | none
     breach_samples: int = 3                   # consecutive out-of-fence samples before acting
 
@@ -426,6 +425,27 @@ class CommandGate:
                                    f"until the instructor releases the lock", key="locked")
         return None
 
+    def pilot_control(self, state: VehicleState) -> Optional[str]:
+        """Name of the mode if the RC pilot (or an ArduPilot failsafe) has taken over, else None.
+
+        "Taken over" = armed, not in GUIDED, and in a mode that neither the students nor the gate
+        selected. Students then cannot command anything (setpoints, modes, landing) until the drone
+        is back in GUIDED, e.g. the pilot hands control back with the mode switch.
+        """
+        if not state.armed or self.locked:
+            return None
+        cur = (state.mode or "").upper()
+        if not cur or cur == "GUIDED" or cur == self.student_mode:
+            return None
+        return cur
+
+    def _pilot(self, state: VehicleState) -> Optional[Decision]:
+        m = self.pilot_control(state)
+        if m:
+            return Decision.reject(f"the RC pilot / a failsafe switched the drone to {m}: student commands are "
+                                   f"ignored until it is back in GUIDED", key="pilot")
+        return None
+
     def lock(self, reason: str):
         self.locked = True
         self.lock_reason = reason
@@ -466,7 +486,7 @@ class CommandGate:
         return self._count(self._check_position(target, state, now))
 
     def _check_position(self, target: Vec3, state: VehicleState, now: Optional[float]) -> Decision:
-        if (d := self._locked()):
+        if (d := self._locked() or self._pilot(state)):
             return d
         if not target.finite():
             return Decision.reject("setpoint contains NaN/inf", key="nan")
@@ -497,6 +517,8 @@ class CommandGate:
         hover = (Vec3(0, 0, 0), 0.0)
         if (d := self._locked()):
             d.value = hover
+            return d
+        if (d := self._pilot(state)):
             return d
         if not v_world.finite() or not math.isfinite(yaw_rate):
             return Decision(False, "velocity contains NaN/inf: replaced by hover", value=hover, key="nan")
@@ -537,6 +559,8 @@ class CommandGate:
 
         if self.locked:
             return rejected(self._locked().reason, "locked")
+        if (d := self._pilot(state)):
+            return self._count(d)
         if frame not in (FRAME_LOCAL_NED, FRAME_LOCAL_OFFSET_NED, FRAME_BODY_NED, FRAME_BODY_OFFSET_NED):
             return rejected(f"coordinate_frame {frame} not allowed (use 1, 7, 8 or 9)", "frame")
         if (type_mask & ACC_BITS) != ACC_BITS or (type_mask & FORCE):
@@ -605,7 +629,7 @@ class CommandGate:
 
     # ---------------- services -----------------
     def check_takeoff(self, altitude: float, state: VehicleState) -> Decision:
-        if (d := self._locked()):
+        if (d := self._locked() or self._pilot(state)):
             return self._count(d)
         if not math.isfinite(altitude):
             return self._count(Decision.reject("takeoff altitude is NaN/inf"))
@@ -623,11 +647,9 @@ class CommandGate:
         mode = (mode or "").upper().strip()
         if self.locked and mode != "LAND":
             return self._count(self._locked())
-        cur = (state.mode or "").upper()
-        if (state.armed and cur in PROTECTED_MODES and cur != self.student_mode and mode != cur):
-            # the instructor, the transmitter or an ArduPilot failsafe put it there - students can't undo it
-            return self._count(Decision.reject(f"the drone is in {cur} set by the instructor/RC/failsafe; "
-                                               f"students cannot leave it", key="protected_mode"))
+        if (d := self._pilot(state)):
+            # the transmitter or an ArduPilot failsafe chose this mode - students must not take it back
+            return self._count(d)
         if mode not in self.rules.allowed_modes:
             return self._count(Decision.reject(f"mode {mode or '<empty>'} not allowed; allowed: "
                                                f"{', '.join(self.rules.allowed_modes)}", key="mode"))
@@ -637,7 +659,9 @@ class CommandGate:
         return self._count(Decision(True, value=mode))
 
     def check_arm(self, value: bool, state: VehicleState) -> Decision:
-        """Returns value = 'arm_sequence' | 'arm' | 'disarm' | 'land_instead'."""
+        """Returns value = 'arm_sequence' | 'arm' | 'disarm' | 'land_instead' | 'noop'."""
+        if (d := self._pilot(state)):
+            return self._count(d)
         if value:
             if (d := self._locked()):
                 return self._count(d)
@@ -650,11 +674,21 @@ class CommandGate:
                                         value="land_instead", modified=True))
         return self._count(Decision(True, value="disarm"))
 
+    def check_land(self, state: VehicleState) -> Decision:
+        """Landing is always allowed - except when the RC pilot has taken over (never fight the pilot)."""
+        if (d := self._pilot(state)):
+            return self._count(d)
+        return self._count(Decision(True, value="LAND"))
+
     # ---------------- breach monitor -----------------
     def update_breach(self, state: VehicleState, now: Optional[float] = None) -> Optional[str]:
         """Call on every pose update. Returns a reason string the first time a breach must be acted on."""
         if self.locked or not state.armed or not state.in_air or not state.pos_fresh(self.limits.pose_timeout_s, now):
             self._breach_count = 0 if not self.locked else self._breach_count
+            return None
+        if self.pilot_control(state):
+            # the RC pilot is flying: the fence is the pilot's responsibility, never take control away
+            self._breach_count = 0
             return None
         why = self.fence.breached(state.pos)
         if self._rearm_needed:

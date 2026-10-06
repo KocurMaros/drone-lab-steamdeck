@@ -2,7 +2,7 @@
 Type=Application
 Version=1.0
 Name=DroneLab Self-test
-Comment=Headless simulation test of the safety gate (about 4 minutes)
+Comment=Headless simulation test of the safety gate (about 6 minutes)
 Exec=konsole --hold -e /home/deck/Desktop/dronelab/scripts/dronelab.sh selftest
 Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-test.svg
 Path=/home/deck/Desktop/dronelab

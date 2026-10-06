@@ -27,7 +27,8 @@ This copies the apps from `apps/` into the menu (Education) and onto the Desktop
 | **DroneLab Flight** | real drones through the safety gate |
 | **DroneLab Demo** | simulation demo for visitors |
 | **DroneLab Shell** | terminal inside the container (ROS 2, MAVROS, Gazebo) |
-| **DroneLab Self-test** | headless simulation test of the gate, ~4 min (close the Demo first) |
+| **DroneLab Square Demo** | takes off to 3 m, flies a 3 × 3 m square, lands (asks: 1 = simulator, or a connected real drone) |
+| **DroneLab Self-test** | headless simulation test of the gate, ~6 min (close the Demo first) |
 | **DroneLab Stop** | stops everything (asks first: gates of connected drones stop too) |
 | **DroneLab Rebuild Image** | rebuilds the container image after a `Dockerfile` change |
 
@@ -41,7 +42,7 @@ For the Deck's own sticks/buttons in the Demo, add `scripts/dronelab-demo-steam.
 *Non-Steam Game* and start it from Steam (controller layout "Gamepad"). External USB/Bluetooth pads
 also work from the desktop icon.
 
-Terminal equivalents: `scripts/dronelab.sh flight | demo | shell | selftest | build | stop | status`.
+Terminal equivalents: `scripts/dronelab.sh flight | demo | square | shell | selftest | build | stop | status`.
 
 ---
 
@@ -62,7 +63,8 @@ Terminal equivalents: `scripts/dronelab.sh flight | demo | shell | selftest | bu
 4. The drone tab shows mode/arming/battery/link/position age/fence state, a top-down fence map with the
    drone, which student topics are active, and every rejected or limited command.
 5. **LAND** / **BRAKE** / **LOITER** act immediately; **KILL** (hold 2 s) cuts the motors;
-   **LAND ALL** (top right) lands every connected drone. RTL/disarm/log/disconnect are under `···`.
+   **LAND ALL** (top right) lands every connected drone. Under `···`: the square demo, *GUIDED - give
+   control back to students*, *Drone parameters*, RTL, disarm, log, disconnect.
 
 Closing the app asks whether to keep the gates running. Keeping them keeps the fence active; reopening
 the app re-attaches.
@@ -93,11 +95,11 @@ simulation works unchanged on the real drone (the Demo's drone is `/drone1`).
 | `setpoint_position/global` | `geographic_msgs/GeoPoseStamped` | outdoor fences only. **Altitude is relative to home**, not AMSL |
 | `setpoint_raw/global` | `mavros_msgs/GlobalPositionTarget` | outdoor only, `coordinate_frame` 6, position only |
 | `cmd/arming` | `mavros_msgs/CommandBool` | `true`: LOITER → ARM → GUIDED (real drones cannot arm in GUIDED). `false` in the air = LAND instead of cutting the motors |
-| `set_mode` | `mavros_msgs/SetMode` | allow-list per fence profile (indoor: GUIDED, LOITER, LAND, BRAKE; RTL only outdoors/sim); GUIDED only once armed. While armed, students cannot leave LAND/RTL/BRAKE that the instructor, the RC or a failsafe selected |
+| `set_mode` | `mavros_msgs/SetMode` | allow-list per fence profile (GUIDED, LAND, BRAKE; RTL only outdoors/sim). LOITER/POSHOLD/ALT_HOLD belong to the RC pilot. GUIDED only once armed |
 | `cmd/takeoff` | `mavros_msgs/CommandTOL` | armed + GUIDED + altitude within the fence |
-| `cmd/land` | `mavros_msgs/CommandTOL` | always allowed |
+| `cmd/land` | `mavros_msgs/CommandTOL` | always allowed (except while the RC pilot has control) |
 | `error` | `std_msgs/String` | every rejection / limitation, rate limited per error type |
-| `gate/status` | `std_msgs/String` (JSON) | fence, limits, lock state, counters |
+| `gate/status` | `std_msgs/String` (JSON) | fence, limits, lock state, `pilot_control`, parameter warnings, counters |
 | `gate/fence` | `visualization_msgs/Marker` | fence outline for RViz (`map` frame) |
 
 Not exposed on purpose: `cmd/command` (arbitrary MAVLink commands), parameter services, RC override.
@@ -117,6 +119,51 @@ until the drone reports LAND) and locks all student commands except landing unti
 can be flown back in. It does not fight your transmitter: once LAND was reached, a mode you select with
 the RC is left alone. The instructor buttons **LAND / BRAKE / LOITER / RTL** also lock student commands.
 
+### Taking over with the RC (LOITER)
+
+Move the flight-mode switch to LOITER (or any other position) and fly normally. The gate sees a mode that
+neither the students nor the Deck chose and:
+
+* rejects **every** student command (setpoints, modes, takeoff, land) with an error on `/droneNN/error`,
+* does not enforce its fence (the pilot may fly anywhere) and never re-sends a mode,
+* shows **RC PILOT HAS CONTROL** in the Flight app; scripts such as the square demo stop at once.
+
+Give the drone back with `···` → **GUIDED - give control back to students** (the lab switch has no
+GUIDED position). If it is outside the fence at that moment, the breach rule lands it, so fly it back in
+first. ArduPilot only reacts to switch **changes**: if the switch already sits on LOITER while the drone
+flies GUIDED, flick it to another position and back.
+
+The flight controller must cooperate. After connecting, the gate reads the relevant parameters and the
+Flight app shows warnings; `···` → **Drone parameters** explains each one and **Fix on the drone** writes
+the recommended values (only while disarmed; stored permanently):
+
+| Parameter | Why | Lab drones now | Fix |
+|---|---|---|---|
+| `RC_OPTIONS` bit 1 | ignore MAVLink RC overrides – only your transmitter flies the drone | 544 | 546 |
+| `FS_GCS_ENABLE` | Deck/Wi-Fi lost during a GUIDED flight → RTL outdoors, LAND indoors | 0 | 1 / 5 |
+| `FS_OPTIONS` bit 4 | …but a pilot flying LOITER is not interrupted | 0 | 16 |
+| `SYSID_MYGCS` | the GCS failsafe watches MAVROS (system 255) | 255 | 255 |
+| `FENCE_*` (outdoor) | ArduPilot's own circle + altitude fence behind the gate's polygon, works without the Deck | off | circle, RTL |
+| `WPNAV_SPEED` | student *position* targets fly this fast (the gate limits velocity commands) | 10 m/s | = gate limit |
+
+The same values for Mission Planner / MAVProxy are in `drones/params/outdoor-rc-takeover.param` and
+`drones/params/indoor-rc-takeover.param` (only safety parameters; tuning and your switch layout stay).
+The GCS failsafe only arms itself after the drone has seen a GCS, so RC-only flights are unaffected.
+
+### Square demo
+
+**DroneLab Square Demo** (or `···` → *Fly 3 × 3 m square demo* in the Flight app, ☰ → *Autopilot* in
+the Demo) arms, takes off to 3 m, flies a 3 × 3 m square at ≤ 1 m/s, returns above the take-off point
+and lands. It is an ordinary student program (`dronelab/demos/square.py`, a good example for
+students): everything goes through the gate. It places the square where it fits inside the fence with
+0.5 m clearance (starting at the take-off point, or centred on it) and lowers the altitude below the fence
+ceiling – **indoors the ceiling is 2.5 m, so it flies at 2.2 m** unless you raise `z` of `indoor_lab`.
+Moving the RC mode switch stops it immediately; Ctrl+C in its window lands the drone.
+
+```bash
+scripts/dronelab.sh square --drone 11 --alt 2 --side 2 --speed 0.5   # options; without --drone it asks
+```
+
 Tuning near walls: allowed speed `v` satisfies `v·lookahead_s + v²/(2·decel) ≤ distance − stop_buffer_m`.
 In SITL a 6 m/s approach stopped 0.3 m inside the wall with the `sim_arena` values. **Check the indoor
 values on the real drone** (fly slowly at a wall with the RC ready) before students use it.
@@ -129,9 +176,8 @@ values on the real drone** (fly slowly at a wall with the RC ready) before stude
   only client slot away from the Deck. For student sessions, remove Server endpoints from the drone and
   use a `Normal` endpoint to the Deck's fixed IP (DHCP reservation on the lab router).
 * **Deck or Wi-Fi failure.** If the link drops, the gate can do nothing. Configure ArduPilot's own
-  failsafes and fence; the attached `drones/edu10/*.params` have `FENCE_ENABLE 0` and
-  `FS_GCS_ENABLE 0`. MAVROS identifies as system 255 (= `SYSID_MYGCS`), so with `FS_GCS_ENABLE` set the
-  drone lands/RTLs when the Deck stops sending heartbeats.
+  failsafes and fence (see *Taking over with the RC* above); the attached `drones/edu10/*.params` have
+  `FENCE_ENABLE 0` and `FS_GCS_ENABLE 0`.
 * **Determined attackers on the network.** The private domain blocks normal ROS 2 discovery from other
   machines; it is not a security boundary against someone crafting DDS packets.
 * **Outdoor flights.** The example outdoor polygon is not your field. EU open-category rules apply
@@ -173,12 +219,15 @@ The arena is generated from `sim/course/arena.yaml` (gates, buildings, trees, fe
 
 ## Testing
 
-* `python3 -m pytest tests` – fence geometry, command validation, discovery (against pymavlink frames),
-  race logic, config consistency (49 tests, no ROS needed).
+* `python3 -m pytest tests` – fence geometry, command validation, RC takeover rules, parameter review,
+  square planning, discovery (against pymavlink frames), race logic, config consistency (59 tests, no ROS
+  needed).
 * `scripts/dronelab.sh selftest` – headless end-to-end run in the container: Gazebo + ArduCopter SITL +
-  MAVROS behind the gate, flown through the student API. Checks isolation, arming/takeoff rules, wall
-  slow-down, the 0.5 s hover watchdog, rejected setpoints, feed-forward removal, mode rules, breach → LAND
-  + lock, release, landing. Takes ~4 min; stop the Demo first.
+  MAVROS behind the gate, flown through the student API. Checks isolation, the parameter check, the
+  square demo, arming/takeoff rules, wall slow-down, the 0.5 s hover watchdog, rejected setpoints,
+  feed-forward removal, mode rules, an RC pilot taking over in LOITER (with RC-override sticks) and flying
+  out of the fence without the gate interfering, hand-back, breach → LAND + lock, release, landing and
+  *Fix on the drone*. 37 checks, ~6 min; stop the Demo first.
 
 ## Files
 
@@ -190,10 +239,13 @@ config/dronelab.yaml           network discovery, fence profiles, limits, demo s
 dronelab/                      Python package (no colcon build needed)
   gate/                        safety gate (one process per drone, starts MAVROS)
   safety.py, geo.py            fence + command validation (pure Python, unit tested)
+  fcparams.py                  ArduPilot parameter review (RC takeover, failsafes)
+  demos/square.py              the square demo (student API example)
   discovery.py, mavlink_lite.py   drone discovery
   gui/flight_app.py, gui/demo_app.py
   sim/stack.py, sim/race.py    simulation processes, race logic
 sim/                           Gazebo world, drone model with FPV camera, SITL params, course
+drones/params/                 RC-takeover / failsafe parameter files (Mission Planner format)
 tests/                         pytest (python3 -m pytest tests)
 legacy/                        the previous per-process launchers (unused, their paths no longer exist)
 var/                           logs, leaderboard (not in git)

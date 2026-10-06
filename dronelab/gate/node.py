@@ -28,12 +28,14 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityP
 from geographic_msgs.msg import GeoPoseStamped
 from geometry_msgs.msg import Point, PoseStamped, Twist, TwistStamped
 from mavros_msgs.msg import ExtendedState, GlobalPositionTarget, PositionTarget, State
-from mavros_msgs.srv import CommandBool, CommandLong, CommandTOL, MessageInterval, SetMode
+from mavros_msgs.srv import CommandBool, CommandLong, CommandTOL, MessageInterval, ParamSetV2, SetMode
+from rcl_interfaces.msg import ParameterType, ParameterValue
+from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import BatteryState, NavSatFix
 from std_msgs.msg import Float64, String
 from visualization_msgs.msg import Marker
 
-from .. import geo
+from .. import fcparams, geo
 from ..config import DroneSettings
 from ..geo import Vec3
 from ..safety import (ACC_BITS, FORCE, FRAME_BODY_NED, FRAME_BODY_OFFSET_NED, FRAME_GLOBAL_REL_ALT,
@@ -112,6 +114,11 @@ class Gate:
         self._seq_lock = threading.Lock()           # one arming sequence at a time
         self._svc_sem = threading.BoundedSemaphore(3)  # blocking student services in flight
         self._breach_thread: Optional[threading.Thread] = None
+        self.params: Dict[str, float] = {}          # safety-relevant ArduPilot parameters (fcparams.NAMES)
+        self.param_types: Dict[str, int] = {}
+        self.params_complete = False
+        self.param_review: list = []                # fcparams.Finding
+        self._next_param_check = 0.0
 
         # ---------- two isolated ROS contexts ----------
         self.ctx_p = Context()
@@ -201,6 +208,8 @@ class Gate:
         self.c_land = n.create_client(CommandTOL, f"{m}/cmd/land", callback_group=self.cg_cli)
         self.c_cmd = n.create_client(CommandLong, f"{m}/cmd/command", callback_group=self.cg_cli)
         self.c_interval = n.create_client(MessageInterval, f"{m}/set_message_interval", callback_group=self.cg_cli)
+        self.c_params = n.create_client(GetParameters, f"{m}/param/get_parameters", callback_group=self.cg_cli)
+        self.c_param_set = n.create_client(ParamSetV2, f"{m}/param/set", callback_group=self.cg_cli)
 
     @guarded
     def _on_state(self, msg: State):
@@ -285,9 +294,18 @@ class Gate:
         """Send the mode first, then tell everyone; retry until the drone reports it (handles a student
         request racing with us), fall back from BRAKE to LAND. Never repeats once reached, so an
         instructor taking over with the RC afterwards is not fought."""
+        with self.lock:
+            start_mode = self.vs.mode
+
         def run():
             target = mode
             for attempt in range(8):
+                with self.lock:
+                    cur = self.vs.mode
+                if cur not in (start_mode, target, "LAND", "BRAKE"):
+                    # someone (the RC pilot) chose another mode meanwhile: never fight the pilot
+                    self.log(f"[gate] {target} not re-sent: mode changed to {cur} (pilot took over)")
+                    return
                 if self.c_mode.service_is_ready():
                     req = SetMode.Request()
                     req.custom_mode = target
@@ -318,7 +336,7 @@ class Gate:
             stale = not self.vs.pos_fresh(1.0, now)
             last_vel = self._last_vel_t
         # 1) the student stopped streaming a velocity: hover now instead of ArduPilot's 3 s timeout
-        if last_vel and now - last_vel > VEL_TIMEOUT_S:
+        if last_vel and now - last_vel > VEL_TIMEOUT_S and not self.cg.pilot_control(self._snapshot()):
             with self.lock:
                 self._last_vel_t = 0.0
             self._publish_hover()
@@ -332,10 +350,92 @@ class Gate:
                     self._streams_requested = now
             else:
                 self._streams_requested = now
-        # 3) position lost while flying: the breach monitor is blind - say so loudly
+        # 3) read the safety-relevant ArduPilot parameters (MAVROS pulls them after connecting)
+        if connected and now >= self._next_param_check:
+            self._next_param_check = now + (120.0 if self.params_complete else 10.0)
+            self._check_params()
+        # 4) position lost while flying: the breach monitor is blind - say so loudly
         if armed and in_air and stale:
             self._error("NO POSITION from the drone for >1 s while flying - fence cannot be checked, "
                         "student velocity commands are replaced by hover", key="pose_lost")
+
+    def _check_params(self, done_event: Optional[threading.Event] = None):
+        """Read fcparams.NAMES from MAVROS' parameter cache (values are type NOT_SET until MAVROS has
+        pulled them from the drone, a few seconds after connecting) and review them."""
+        if not self.c_params.service_is_ready():
+            if done_event:
+                done_event.set()
+            return
+        req = GetParameters.Request()
+        req.names = list(fcparams.NAMES)
+
+        def done(fut):
+            try:
+                res = fut.result()
+                vals, types = {}, {}
+                for name, v in zip(fcparams.NAMES, res.values):
+                    if v.type == ParameterType.PARAMETER_INTEGER:
+                        vals[name], types[name] = float(v.integer_value), v.type
+                    elif v.type == ParameterType.PARAMETER_DOUBLE:
+                        vals[name], types[name] = float(v.double_value), v.type
+                review = fcparams.review(vals, self.ds)
+                with self.lock:
+                    self.params.update(vals)
+                    self.param_types.update(types)
+                    # parameters a firmware lacks stay missing: "checked" = the essential ones arrived
+                    self.params_complete = all(n in self.params for n in fcparams.REQUIRED)
+                    self.param_review = review
+            except Exception as e:
+                self.log(f"[gate] parameter check failed: {e}")
+            finally:
+                if done_event:
+                    done_event.set()
+        self.c_params.call_async(req).add_done_callback(done)
+
+    def refresh_params(self, timeout: float = 5.0):
+        ev = threading.Event()
+        self._check_params(ev)
+        ev.wait(timeout)
+
+    def fix_params(self, names: Optional[list] = None) -> Tuple[bool, str]:
+        """Write the values fcparams.review() recommends (only while disarmed). ArduPilot stores
+        PARAM_SET values permanently."""
+        if self._snapshot().armed:
+            return False, "refusing to change parameters while armed"
+        self.refresh_params()
+        with self.lock:
+            todo = fcparams.fixes(self.param_review)
+            old = dict(self.params)
+            types = dict(self.param_types)
+        if names:
+            todo = {k: v for k, v in todo.items() if k in names}
+        todo = {k: v for k, v in todo.items() if old.get(k) is None or abs(old[k] - v) > 1e-6}
+        if not todo:
+            return True, "nothing to change"
+        done, failed = [], []
+        for name, value in todo.items():
+            req = ParamSetV2.Request()
+            req.param_id = name
+            req.force_set = False
+            pv = ParameterValue()
+            if types.get(name, ParameterType.PARAMETER_INTEGER) == ParameterType.PARAMETER_DOUBLE:
+                pv.type, pv.double_value = ParameterType.PARAMETER_DOUBLE, float(value)
+            else:
+                pv.type, pv.integer_value = ParameterType.PARAMETER_INTEGER, int(round(value))
+            req.value = pv
+            out, err = self._call(self.c_param_set, req, timeout=10.0)
+            prev = old.get(name)
+            prev_s = "?" if prev is None else f"{prev:g}"
+            if out and out.success:
+                done.append(f"{name} {prev_s} -> {value:g}")
+            else:
+                failed.append(f"{name} ({err or 'rejected by the drone'})")
+        self.refresh_params()
+        self.log("[gate] parameters written: " + "; ".join(done) + (" FAILED: " + "; ".join(failed) if failed else ""))
+        self._error("instructor changed drone parameters: " + ", ".join(done), key="params", force=True)
+        if failed:
+            return False, "written: " + (", ".join(done) or "none") + ". FAILED: " + ", ".join(failed)
+        return True, "written (stored on the drone): " + ", ".join(done)
 
     def _request_streams(self) -> bool:
         if not self.c_interval.service_is_ready():
@@ -383,6 +483,12 @@ class Gate:
             qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10, reliability=rel, durability=dur)
             suffix = name[len(self.mns) + 1:]
             out = f"{self.sns}/{suffix}"
+            if out in getattr(self, "student_inputs", ()) or suffix.startswith("setpoint_"):
+                # e.g. a program bypassing the gate publishes /mavros/setpoint_position/local: relaying it
+                # would feed it into the gate's own student input (a loop)
+                with self.lock:
+                    self.relays[name] = None
+                continue
             try:
                 from rosidl_runtime_py.utilities import get_message
                 cls = get_message(types[0])
@@ -473,6 +579,8 @@ class Gate:
         self.p_err = n.create_publisher(String, f"{s}/error", 10)
         self.p_status = n.create_publisher(String, f"{s}/gate/status", LATCHED)
         self.p_fence = n.create_publisher(Marker, f"{s}/gate/fence", LATCHED)
+        # student command inputs: a /mavros topic with the same name is never relayed back onto them
+        self.student_inputs = {sub.topic_name for sub in n.subscriptions}
 
     # ----- helpers -----
     def _error(self, text: str, key: str = "", force: bool = False):
@@ -741,12 +849,14 @@ class Gate:
         return False, "arming command accepted but state did not change"
 
     def arm_sequence(self) -> Tuple[bool, str]:
+        self.cg.student_mode = "LOITER"     # gate-chosen, not a pilot takeover
         ok, msg = self.set_mode("LOITER")
         if not ok:
             return False, "LOITER: " + msg
         ok, msg = self.arm(True)
         if not ok:
             return False, "ARM: " + msg
+        self.cg.student_mode = "GUIDED"
         ok, msg = self.set_mode("GUIDED")
         if not ok:
             return False, "GUIDED: " + msg
@@ -784,6 +894,7 @@ class Gate:
                     if ok:
                         self.cg.student_mode = "GUIDED"
                 elif action == "arm":
+                    self.cg.student_mode = (self._snapshot().mode or "").upper()   # armed in the student's mode
                     ok, msg = self.arm(True)
                 elif action == "land_instead":
                     ok, msg = self.set_mode("LAND")
@@ -850,6 +961,11 @@ class Gate:
     def _srv_land(self, req, res):
         # own callback group, no semaphore: landing must never wait behind other calls
         self._touch("cmd/land")
+        d = self.cg.check_land(self._snapshot())
+        if not d.ok:
+            self._reject(d, "cmd/land")
+            res.success, res.result = False, 1
+            return res
         out, err = self._call(self.c_land, req)
         res.success = bool(out and out.success)
         res.result = out.result if out else 1
@@ -873,8 +989,10 @@ class Gate:
             if lock and mode != "GUIDED":
                 with self.lock:
                     self.cg.lock(f"instructor selected {mode}")
+            elif not lock:
+                self.cg.student_mode = mode     # chosen from the Deck (e.g. the Demo app), not by the RC pilot
             ok, msg = self.set_mode(mode)
-            if ok and lock:
+            if ok and lock and mode != "GUIDED":
                 msg += " (student commands locked until RELEASE LOCK)"
         elif c == "release_lock":
             with self.lock:
@@ -893,6 +1011,11 @@ class Gate:
             out, err = self._call(self.c_cmd, req)
             ok = bool(out and out.success)
             msg = "motors killed" if ok else (err or "kill rejected")
+        elif c == "fix_params":
+            ok, msg = self.fix_params(cmd.get("names"))
+        elif c == "check_params":
+            self.refresh_params()
+            ok, msg = True, f"{sum(1 for f in self.param_review if f.level == 'warn')} parameter warnings"
         elif c == "arm_takeoff":
             ok, msg = self.arm_and_takeoff(float(cmd.get("alt", 1.0)))
         else:
@@ -956,6 +1079,10 @@ class Gate:
                 "limits": {"max_speed_xy": self.ds.limits.max_speed_xy, "max_speed_z": self.ds.limits.max_speed_z},
                 "allowed_modes": list(self.ds.rules.allowed_modes),
                 "callback_errors": self.callback_errors, "executors_alive": self.executors_alive,
+                "pilot_control": self.cg.pilot_control(v),
+                "param_warnings": [f.text for f in self.param_review if f.level == "warn"],
+                "param_review": [f.as_dict() for f in self.param_review],
+                "params": dict(self.params), "params_checked": self.params_complete,
             }
             st["errors"] = list(self.errors)[-12:]
         return st
