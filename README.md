@@ -107,11 +107,18 @@ ros2 topic list             # /drone13/state, /drone13/local_position/pose, ...
 ros2 service call /drone13/set_mode mavros_msgs/srv/SetMode "{custom_mode: GUIDED}"
 ```
 
-Nothing else is needed when the network passes multicast. If it does not (some Wi-Fi), also tell the PC
-the Deck's IP (`192.168.88.250` = the IP shown in the drone tab):
+**Check a student PC:** copy `scripts/student_check.py` to it and run `python3 student_check.py`
+(add `--deck 192.168.88.250` if it finds nothing). It lists the drones, checks that data arrives
+(`/droneNN/gate/status`) and that services work (`/droneNN/gate/ping`, harmless), and prints the exact
+lines to put in `~/.bashrc`.
+
+**PC with more than one network** (Docker's `docker0`, a VPN, Wi-Fi + Ethernet): DDS may announce an
+address the Deck cannot reach – you then see nothing, or see the topics but no data arrives. Pin
+CycloneDDS to the interface on the Deck's network (`ip -br a`; here `wlp2s0`), with the Deck's IP as a
+peer, which also helps on Wi-Fi without multicast:
 
 ```bash
-export CYCLONEDDS_URI='<CycloneDDS><Domain Id="any"><Discovery><ParticipantIndex>auto</ParticipantIndex><Peers><Peer Address="192.168.88.250"/></Peers></Discovery></Domain></CycloneDDS>'
+export CYCLONEDDS_URI='<CycloneDDS><Domain Id="any"><General><Interfaces><NetworkInterface name="wlp2s0"/></Interfaces></General><Discovery><ParticipantIndex>auto</ParticipantIndex><Peers><Peer Address="192.168.88.250"/></Peers></Discovery></Domain></CycloneDDS>'
 ```
 
 Students never need the drone's IP: they only talk to the Deck.
@@ -129,6 +136,7 @@ Students never need the drone's IP: they only talk to the Deck.
 | `cmd/takeoff` | `mavros_msgs/CommandTOL` | armed + GUIDED + altitude within the fence |
 | `cmd/land` | `mavros_msgs/CommandTOL` | always allowed (except while the RC pilot has control) |
 | `error` | `std_msgs/String` | every rejection / limitation, rate limited per error type |
+| `gate/ping` | `std_srvs/Trigger` | does nothing, answers "gate /droneNN OK ..." – tests that services work |
 | `gate/status` | `std_msgs/String` (JSON) | fence, limits, lock state, `pilot_control`, parameter warnings, counters |
 | `gate/fence` | `visualization_msgs/Marker` | fence outline for RViz (`map` frame) |
 
@@ -298,6 +306,9 @@ from the apps' menus.
   (barometer drift indoors: `EK3_SRC1_POSZ=1`; OptiTrack height is `6`), so the fence floor/ceiling would
   be off too. Students cannot arm until it reads ~0; reboot the flight controller or fix the source.
   `gate.ground_tolerance_m: 0` disables the check.
+* **Students see the topics but no data arrives** – run `scripts/student_check.py` on the PC. Usual
+  causes: a stale `ros2 daemon` (it shows topics another configuration discovered: `ros2 daemon stop`),
+  a second network on the PC (Docker, VPN: pin the interface, see *Student interface*), a firewall.
 * **Students see no topics** – is the drone *connected* in the Flight app? On the student PC:
   `printenv | grep ROS` (domain 0, no `ROS_LOCALHOST_ONLY`), `ros2 daemon stop`, firewall (`sudo ufw
   status`). Test without DroneLab: in DroneLab Shell `ros2 topic pub -r 1 /hello std_msgs/msg/String

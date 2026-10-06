@@ -33,6 +33,7 @@ from rcl_interfaces.msg import ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import BatteryState, NavSatFix
 from std_msgs.msg import Float64, String
+from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker
 
 from .. import fcparams, geo
@@ -119,6 +120,7 @@ class Gate:
         self.params_complete = False
         self.param_review: list = []                # fcparams.Finding
         self.ground_problem: Optional[str] = None
+        self.student_iface = ""                     # e.g. "wlan0 192.168.88.250" (set by __main__)
         self._ground_err_t = 0.0
         self._next_param_check = 0.0
 
@@ -585,6 +587,8 @@ class Gate:
         n.create_service(SetMode, f"{s}/set_mode", self._srv_mode, callback_group=self.cg_srv)
         n.create_service(CommandTOL, f"{s}/cmd/takeoff", self._srv_takeoff, callback_group=self.cg_srv)
         n.create_service(CommandTOL, f"{s}/cmd/land", self._srv_land, callback_group=self.cg_land)
+        # harmless round trip for student PCs to test that services work (scripts/student_check.py)
+        n.create_service(Trigger, f"{s}/gate/ping", self._srv_ping, callback_group=self.cg_land)
         self.p_err = n.create_publisher(String, f"{s}/error", 10)
         self.p_status = n.create_publisher(String, f"{s}/gate/status", LATCHED)
         self.p_fence = n.create_publisher(Marker, f"{s}/gate/fence", LATCHED)
@@ -992,6 +996,14 @@ class Gate:
             self.cg.student_mode = "LAND"
         return res
 
+    @guarded
+    def _srv_ping(self, req, res):
+        v = self._snapshot()
+        res.success = True
+        res.message = (f"gate {self.sns} OK: {'connected' if v.connected else 'no FCU'}, mode {v.mode or '?'}, "
+                       f"{'armed' if v.armed else 'disarmed'}{', LOCKED' if self.cg.locked else ''}")
+        return res
+
     # ----- instructor commands (admin socket) -----
     def admin(self, cmd: dict) -> dict:
         c = cmd.get("cmd")
@@ -1094,6 +1106,7 @@ class Gate:
                 "allowed_modes": list(self.ds.rules.allowed_modes),
                 "callback_errors": self.callback_errors, "executors_alive": self.executors_alive,
                 "pilot_control": self.cg.pilot_control(v), "ground_problem": self.ground_problem,
+                "student_iface": self.student_iface,
                 "param_warnings": [f.text for f in self.param_review if f.level == "warn"],
                 "param_review": [f.as_dict() for f in self.param_review],
                 "params": dict(self.params), "params_checked": self.params_complete,

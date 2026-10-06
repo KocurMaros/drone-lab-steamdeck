@@ -131,10 +131,11 @@ def main(argv=None):
 
     from .node import Gate  # noqa: E402  (imports rclpy)
     gate = Gate(ds, a.mavros_ns, log=log)
+    gate.student_iface = iface_desc
 
     def status():
         st = gate.status()
-        st.update(mavros_alive=mav.alive, fcu_url=a.fcu_url, pid=os.getpid(), student_iface=iface_desc,
+        st.update(mavros_alive=mav.alive, fcu_url=a.fcu_url, pid=os.getpid(),
                   mavros_tail=list(mav.tail)[-6:])
         return st
 
