@@ -34,7 +34,9 @@ network:
   # loopback interface only. Students cannot reach it, only the gate can.
   # Must stay <= 101 (Linux DDS port range), so base + highest sysid <= 101.
   private_domain_base: 70
-  # Network interface students reach the Deck on: "auto" or e.g. "wlan0".
+  # Network interface students reach the Deck on: "auto" (the interface with the default route,
+  # e.g. wlan0; docker/VPN interfaces are skipped) or a name from `ip -br a`, e.g. "wlan0".
+  # The Flight app shows the choice next to "Students: ROS_DOMAIN_ID=0 via ...".
   student_interface: auto
 
 # Defaults for every drone; per-system-ID overrides below.

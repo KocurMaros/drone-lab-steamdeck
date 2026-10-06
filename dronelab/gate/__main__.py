@@ -16,7 +16,7 @@ import sys
 import threading
 
 from ..config import VAR_DIR, Config
-from ..dds import ros_env, write_cyclone_config
+from ..dds import resolve_student_interface, ros_env, write_cyclone_config
 from .admin import AdminServer
 
 
@@ -121,8 +121,10 @@ def main(argv=None):
         sys.exit(f"a gate for system {a.sysid} is already running ({ds.socket_path})")
 
     # DDS environment must be in place before rclpy is imported
-    xml = write_cyclone_config(f"gate-{ds.sysid}", [ds.private_domain], ds.student_domain, ds.student_interface)
+    iface, iface_desc = resolve_student_interface(ds.student_interface)
+    xml = write_cyclone_config(f"gate-{ds.sysid}", [ds.private_domain], ds.student_domain, iface)
     os.environ.update(ros_env(ds.private_domain, xml))
+    log(f"[gate] students reach drone {ds.sysid} on ROS_DOMAIN_ID={ds.student_domain} via {iface_desc}")
 
     mav = Mavros(ds, a.fcu_url, a.tgt_component, log)
     mav.start()
@@ -132,7 +134,7 @@ def main(argv=None):
 
     def status():
         st = gate.status()
-        st.update(mavros_alive=mav.alive, fcu_url=a.fcu_url, pid=os.getpid(),
+        st.update(mavros_alive=mav.alive, fcu_url=a.fcu_url, pid=os.getpid(), student_iface=iface_desc,
                   mavros_tail=list(mav.tail)[-6:])
         return st
 

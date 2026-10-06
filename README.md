@@ -86,6 +86,41 @@ Ports, targets and timings are in `config/dronelab.yaml` → `network`. Every dr
 Same names and types as MAVROS, with `/drone<ID>` instead of `/mavros`. Code written against the
 simulation works unchanged on the real drone (the Demo's drone is `/drone1`).
 
+Topics exist only while a drone is **connected** in the Flight app (the Flight app itself is not on
+ROS). The drone tab shows `Students: ROS_DOMAIN_ID=0 via wlan0 192.168.88.250` – the Deck's interface
+and IP students must reach.
+
+**Student PC** (ROS 2 Humble, same network as the Deck, any RMW – Fast DDS default or CycloneDDS):
+
+```bash
+unset ROS_LOCALHOST_ONLY ROS_DISCOVERY_SERVER
+export ROS_DOMAIN_ID=0
+ros2 daemon stop            # the daemon caches an old view of the network
+ros2 topic list             # /drone11/state, /drone11/local_position/pose, ...
+```
+
+Nothing else is needed when the network passes multicast. If it does not (some Wi-Fi), tell the PC
+the Deck's IP explicitly (`192.168.88.250` = the IP shown in the drone tab):
+
+```bash
+# CycloneDDS on the student PC (sudo apt install ros-humble-rmw-cyclonedds-cpp)
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI='<CycloneDDS><Domain Id="any"><Discovery><ParticipantIndex>auto</ParticipantIndex><Peers><Peer Address="192.168.88.250"/></Peers></Discovery></Domain></CycloneDDS>'
+```
+
+```xml
+<!-- Fast DDS (Humble default): save as ~/deck.xml, then export FASTRTPS_DEFAULT_PROFILES_FILE=~/deck.xml -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <participant profile_name="deck" is_default_profile="true">
+    <rtps><builtin><initialPeersList>
+      <locator><udpv4><address>192.168.88.250</address></udpv4></locator>
+    </initialPeersList></builtin></rtps>
+  </participant>
+</profiles>
+```
+
+Students never need the drone's IP: they only talk to the Deck.
+
 | Topic / service | Type | Gate behaviour |
 |---|---|---|
 | `/droneNN/<every MAVROS topic>` (state, local_position/pose, battery, imu/data, statustext/recv, …) | as MAVROS | relayed (local poses in the arena frame) |
@@ -256,6 +291,12 @@ from the apps' menus.
 
 ## Troubleshooting
 
+* **Students see no topics** – is the drone *connected* in the Flight app? On the student PC:
+  `printenv | grep ROS` (domain 0, no `ROS_LOCALHOST_ONLY`), `ros2 daemon stop`, firewall (`sudo ufw
+  status`). Test without DroneLab: in DroneLab Shell `ros2 topic pub -r 1 /hello std_msgs/msg/String
+  "{data: deck}"`, on the PC `ros2 topic echo /hello`. Wrong interface on the Deck (several networks)?
+  Check the "via ..." in the drone tab, set `network.student_interface` in `config/local.yaml`, reconnect.
+  No multicast on the Wi-Fi? Use the explicit-IP setup under *Student interface*.
 * **No drone found** – check the Deck's IP (top bar) is in the drone's subnet; `ip a` in DroneLab Shell;
   on the drone `systemctl status mavlink-router`. Use Manual connection with the drone's IP.
 * **"ports already in use"** – another MAVROS/QGroundControl holds them (`scripts/dronelab.sh stop`

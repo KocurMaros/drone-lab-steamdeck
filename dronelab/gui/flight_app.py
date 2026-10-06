@@ -227,7 +227,7 @@ class DronePanel(QWidget):
         self.map.update_state(st.get("fence") or {}, st.get("pos"), st.get("yaw"), bool(st.get("locked")))
         self.i_title.setText(f"Drone {st.get('sysid')} · {st.get('profile_label')}")
         ns = st.get("student_ns", "")
-        self.i_ns.setText(f"Students: ROS_DOMAIN_ID={st.get('student_domain')}\n"
+        self.i_ns.setText(f"Students: ROS_DOMAIN_ID={st.get('student_domain')} via {st.get('student_iface', '?')}\n"
                           f"  {ns}/setpoint_position/local\n"
                           f"  {ns}/cmd/arming · {ns}/error\n"
                           f"  {st.get('relayed_topics', 0)} MAVROS topics relayed\n"
