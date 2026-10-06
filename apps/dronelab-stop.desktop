@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Stop
+Comment=Stop all DroneLab apps, the simulation and the gates
+Exec=/home/deck/Desktop/dronelab/scripts/dronelab.sh stop
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-stop.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

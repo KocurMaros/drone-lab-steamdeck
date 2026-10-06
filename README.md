@@ -20,7 +20,19 @@ git clone https://github.com/KocurMaros/drone-lab-steamdeck.git ~/Desktop/dronel
 ~/Desktop/dronelab/scripts/install-desktop.sh
 ```
 
-This puts **DroneLab Flight**, **DroneLab Demo** and **DroneLab Shell** in the menu and on the Desktop.
+This copies the apps from `apps/` into the menu (Education) and onto the Desktop:
+
+| App | Does |
+|---|---|
+| **DroneLab Flight** | real drones through the safety gate |
+| **DroneLab Demo** | simulation demo for visitors |
+| **DroneLab Shell** | terminal inside the container (ROS 2, MAVROS, Gazebo) |
+| **DroneLab Self-test** | headless simulation test of the gate, ~4 min (close the Demo first) |
+| **DroneLab Stop** | stops everything (asks first: gates of connected drones stop too) |
+| **DroneLab Rebuild Image** | rebuilds the container image after a `Dockerfile` change |
+
+The files in `apps/` point to `/home/deck/Desktop/dronelab`, so they also work when double-clicked
+straight from that folder; the installer rewrites the path if the repo lives elsewhere.
 The first start builds the container image (`podman`, preinstalled on SteamOS 3.5+; 30–60 min the
 first time, a Konsole window shows progress). Later starts take seconds. After `git pull` no
 rebuild is needed unless the `Dockerfile` changed (the launcher notices and rebuilds).
@@ -29,7 +41,7 @@ For the Deck's own sticks/buttons in the Demo, add `scripts/dronelab-demo-steam.
 *Non-Steam Game* and start it from Steam (controller layout "Gamepad"). External USB/Bluetooth pads
 also work from the desktop icon.
 
-Terminal equivalents: `scripts/dronelab.sh flight | demo | shell | build | stop | status`.
+Terminal equivalents: `scripts/dronelab.sh flight | demo | shell | selftest | build | stop | status`.
 
 ---
 
@@ -171,6 +183,7 @@ The arena is generated from `sim/course/arena.yaml` (gates, buildings, trees, fe
 ## Files
 
 ```
+apps/*.desktop                 the desktop apps (installed by scripts/install-desktop.sh)
 scripts/dronelab.sh            host launcher (podman/docker), used by the desktop icons
 scripts/in-container.sh        environment inside the container
 config/dronelab.yaml           network discovery, fence profiles, limits, demo settings
@@ -182,7 +195,7 @@ dronelab/                      Python package (no colcon build needed)
   sim/stack.py, sim/race.py    simulation processes, race logic
 sim/                           Gazebo world, drone model with FPV camera, SITL params, course
 tests/                         pytest (python3 -m pytest tests)
-legacy/                        the previous per-process launchers (unused)
+legacy/                        the previous per-process launchers (unused, their paths no longer exist)
 var/                           logs, leaderboard (not in git)
 ```
 

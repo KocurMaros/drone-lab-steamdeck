@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Shell
+Comment=Terminal inside the DroneLab container (ROS 2, MAVROS, Gazebo)
+Exec=/home/deck/Desktop/dronelab/scripts/dronelab.sh shell
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-shell.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

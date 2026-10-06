@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Flight
+Comment=Real drones: find, connect and fence them through the safety gate
+Exec=/home/deck/Desktop/dronelab/scripts/dronelab.sh flight
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-flight.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

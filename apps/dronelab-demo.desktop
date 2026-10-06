@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Demo
+Comment=Simulation demo: fly through the gates with a gamepad
+Exec=/home/deck/Desktop/dronelab/scripts/dronelab.sh demo
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-demo.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

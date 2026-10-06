@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DroneLab Rebuild Image
+Comment=Rebuild the container image after a Dockerfile change
+Exec=konsole --hold -e /home/deck/Desktop/dronelab/scripts/dronelab.sh build
+Icon=/home/deck/Desktop/dronelab/resources/icons/dronelab-build.svg
+Path=/home/deck/Desktop/dronelab
+Terminal=false
+StartupNotify=true
+Categories=Education;

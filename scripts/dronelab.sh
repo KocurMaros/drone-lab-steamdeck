@@ -122,7 +122,15 @@ case "${1:-flight}" in
         start_container
         exec $ENGINE exec "$NAME" /opt/dronelab/scripts/in-container.sh --exec python3 tools/e2e_sim_test.py ;;
     build)  do_build ;;
-    stop)   $ENGINE rm -f "$NAME" && log "container stopped" ;;
+    stop)
+        if running && [ ! -t 0 ] && command -v kdialog >/dev/null; then
+            kdialog --title DroneLab --warningcontinuecancel "Stop DroneLab?
+
+This closes all DroneLab apps, the simulation and every safety gate + MAVROS.
+Connected real drones lose the fence. Only do this when no drone is flying." || exit 0
+        fi
+        $ENGINE rm -f "$NAME" >/dev/null 2>&1
+        notify "DroneLab stopped" ;;
     status)
         echo "engine:    $ENGINE"
         echo "image:     $IMAGE ($(image_ok && echo "version $IMAGE_VERSION OK" || echo "missing/outdated"))"
