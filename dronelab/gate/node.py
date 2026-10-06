@@ -118,6 +118,8 @@ class Gate:
         self.param_types: Dict[str, int] = {}
         self.params_complete = False
         self.param_review: list = []                # fcparams.Finding
+        self.ground_problem: Optional[str] = None
+        self._ground_err_t = 0.0
         self._next_param_check = 0.0
 
         # ---------- two isolated ROS contexts ----------
@@ -354,7 +356,14 @@ class Gate:
         if connected and now >= self._next_param_check:
             self._next_param_check = now + (120.0 if self.params_complete else 10.0)
             self._check_params()
-        # 4) position lost while flying: the breach monitor is blind - say so loudly
+        # 4) height reference: on the ground an indoor drone must read z ~ 0 (fence floor/ceiling depend on it)
+        with self.lock:
+            gp = self.cg.ground_problem(self.vs) if connected and not stale else None
+            self.ground_problem = gp
+        if gp and now - self._ground_err_t > 10.0:
+            self._ground_err_t = now
+            self._error("HEIGHT: " + gp, key="ground_z", force=True)
+        # 5) position lost while flying: the breach monitor is blind - say so loudly
         if armed and in_air and stale:
             self._error("NO POSITION from the drone for >1 s while flying - fence cannot be checked, "
                         "student velocity commands are replaced by hover", key="pose_lost")
@@ -889,6 +898,9 @@ class Gate:
             try:
                 if action == "noop":
                     ok, msg = True, "already armed"
+                elif action == "noop_disarmed":
+                    ok, msg = True, "already disarmed"
+                    self._error("cmd/arming(false): " + d.reason, key="disarm_noop")
                 elif action == "arm_sequence":
                     ok, msg = self.arm_sequence()
                     if ok:
@@ -1029,6 +1041,8 @@ class Gate:
             st = self._snapshot()
             if self.cg.locked:
                 return False, "locked (fence breach or instructor) - release the lock first"
+            if not st.armed and (why := self.cg.ground_problem(st)):
+                return False, why
             if not st.armed:
                 if self.ds.rules.arm_sequence == "loiter_arm_guided":
                     ok, msg = self.arm_sequence()
@@ -1079,7 +1093,7 @@ class Gate:
                 "limits": {"max_speed_xy": self.ds.limits.max_speed_xy, "max_speed_z": self.ds.limits.max_speed_z},
                 "allowed_modes": list(self.ds.rules.allowed_modes),
                 "callback_errors": self.callback_errors, "executors_alive": self.executors_alive,
-                "pilot_control": self.cg.pilot_control(v),
+                "pilot_control": self.cg.pilot_control(v), "ground_problem": self.ground_problem,
                 "param_warnings": [f.text for f in self.param_review if f.level == "warn"],
                 "param_review": [f.as_dict() for f in self.param_review],
                 "params": dict(self.params), "params_checked": self.params_complete,

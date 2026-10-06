@@ -41,6 +41,12 @@ FRAME_GLOBAL_TERRAIN_ALT_INT = 11
 
 LANDED_UNDEFINED, LANDED_ON_GROUND, LANDED_IN_AIR, LANDED_TAKEOFF, LANDED_LANDING = 0, 1, 2, 3, 4
 
+# ROS 2 services do not work between Fast DDS (the Humble default) and CycloneDDS (the Deck): the request
+# arrives shifted (empty strings, zeros, false) and the reply never comes back. Topics work.
+RMW_HINT = ("If you did send a value, your PC uses Fast DDS: ROS 2 services do not work between Fast DDS "
+            "and the Deck's CycloneDDS (topics do). On the student PC: "
+            "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp (apt install ros-humble-rmw-cyclonedds-cpp)")
+
 # zero-velocity hover in the local frame (velocity + yaw-rate used, everything else ignored)
 HOVER_RAW = dict(frame=1, type_mask=1 | 2 | 4 | 64 | 128 | 256 | 1024, pos=Vec3(0, 0, 0), vel=Vec3(0, 0, 0),
                  yaw_rate=0.0)
@@ -373,6 +379,10 @@ class Rules:
     allowed_modes: List[str] = field(default_factory=lambda: ["GUIDED", "LAND", "BRAKE"])
     breach_action: str = "land"               # land | brake | none
     breach_samples: int = 3                   # consecutive out-of-fence samples before acting
+    # local (indoor) fences: a drone on the ground must read z = 0 +- this. Otherwise its height reference
+    # drifted (barometer) or the arena frame's floor is not z = 0, and the fence floor/ceiling, take-off
+    # heights and "in the air" detection are all off by that much -> students cannot arm. 0 = no check.
+    ground_tolerance_m: float = 0.5
 
     def __post_init__(self):
         self.allowed_modes = [m.upper() for m in self.allowed_modes]
@@ -438,6 +448,20 @@ class CommandGate:
         if not cur or cur == "GUIDED" or cur == self.student_mode:
             return None
         return cur
+
+    def ground_problem(self, state: VehicleState) -> Optional[str]:
+        """Why the drone's height cannot be trusted (local fences, disarmed, on the ground), else None."""
+        tol = self.rules.ground_tolerance_m
+        if (tol <= 0 or self.fence.kind != "local" or state.armed or state.pos is None
+                or state.landed_state in (LANDED_IN_AIR, LANDED_TAKEOFF, LANDED_LANDING)):
+            return None
+        z = state.pos.z
+        if abs(z) <= tol:
+            return None
+        return (f"the drone stands on the ground but its height reads {z:+.2f} m (allowed +-{tol:g} m): the height "
+                f"reference drifted (barometer? use OptiTrack height, EK3_SRC1_POSZ=6) or the arena floor is not "
+                f"z=0 (arena_to_local z). Fence floor/ceiling and take-off heights would be off by {abs(z):.1f} m; "
+                f"arming is blocked until it reads ~0 (reboot the flight controller or fix the source)")
 
     def _pilot(self, state: VehicleState) -> Optional[Decision]:
         m = self.pilot_control(state)
@@ -633,6 +657,8 @@ class CommandGate:
             return self._count(d)
         if not math.isfinite(altitude):
             return self._count(Decision.reject("takeoff altitude is NaN/inf"))
+        if altitude == 0.0:
+            return self._count(Decision.reject("takeoff altitude is 0. " + RMW_HINT, key="to_zero"))
         if not state.armed:
             return self._count(Decision.reject("takeoff rejected: not armed (call cmd/arming first)", key="to_arm"))
         if state.mode != "GUIDED":
@@ -650,6 +676,8 @@ class CommandGate:
         if (d := self._pilot(state)):
             # the transmitter or an ArduPilot failsafe chose this mode - students must not take it back
             return self._count(d)
+        if not mode:
+            return self._count(Decision.reject("custom_mode is empty. " + RMW_HINT, key="mode_empty"))
         if mode not in self.rules.allowed_modes:
             return self._count(Decision.reject(f"mode {mode or '<empty>'} not allowed; allowed: "
                                                f"{', '.join(self.rules.allowed_modes)}", key="mode"))
@@ -667,11 +695,15 @@ class CommandGate:
                 return self._count(d)
             if state.armed:
                 return self._count(Decision(True, "already armed", value="noop"))
+            if (why := self.ground_problem(state)):
+                return self._count(Decision.reject("arming refused: " + why, key="ground_z"))
             return self._count(Decision(True, value="arm_sequence" if self.rules.arm_sequence == "loiter_arm_guided"
                                         else "arm"))
         if state.armed and state.in_air:
             return self._count(Decision(True, "in the air: switching to LAND instead of cutting the motors",
                                         value="land_instead", modified=True))
+        if not state.armed:
+            return self._count(Decision(True, "already disarmed. " + RMW_HINT, value="noop_disarmed"))
         return self._count(Decision(True, value="disarm"))
 
     def check_land(self, state: VehicleState) -> Decision:

@@ -179,7 +179,10 @@ class Config:
                                                             g.get("allowed_modes", Rules().allowed_modes))],
             breach_action=action,
             breach_samples=max(1, int(g.get("breach_samples", 3))),
+            ground_tolerance_m=float(prof.get("ground_tolerance_m", g.get("ground_tolerance_m", 0.5))),
         )
+        if not (math.isfinite(rules.ground_tolerance_m) and rules.ground_tolerance_m >= 0):
+            raise ValueError(f"ground_tolerance_m must be >= 0 (profile '{prof_name}')")
         a2l = prof.get("arena_to_local", {}) or {}
         tf = geo.Transform2D5(float(a2l.get("x", 0)), float(a2l.get("y", 0)), float(a2l.get("z", 0)),
                               math.radians(float(a2l.get("yaw_deg", 0))))

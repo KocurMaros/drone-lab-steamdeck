@@ -23,7 +23,8 @@ from typing import Dict, List
 
 NAMES = ("RC_OPTIONS", "FLTMODE_CH", "FLTMODE1", "FLTMODE2", "FLTMODE3", "FLTMODE4", "FLTMODE5", "FLTMODE6",
          "FS_GCS_ENABLE", "FS_OPTIONS", "FS_GCS_TIMEOUT", "FS_THR_ENABLE", "FENCE_ENABLE", "FENCE_TYPE",
-         "FENCE_ALT_MAX", "FENCE_RADIUS", "FENCE_ACTION", "RTL_ALT", "WPNAV_SPEED", "SYSID_MYGCS")
+         "FENCE_ALT_MAX", "FENCE_RADIUS", "FENCE_ACTION", "RTL_ALT", "WPNAV_SPEED", "SYSID_MYGCS",
+         "EK3_SRC1_POSZ")
 
 REQUIRED = ("RC_OPTIONS", "FLTMODE1", "FS_GCS_ENABLE", "FS_OPTIONS", "SYSID_MYGCS")   # all ArduCopter versions
 
@@ -141,6 +142,12 @@ def review(p: Dict[str, float], ds) -> List[Finding]:
         else:
             out.append(Finding("info", f"RTL_ALT={p['RTL_ALT'] / 100:.1f} m is above the indoor ceiling: RTL is not "
                                        f"allowed indoors (failsafes should LAND: FS_GCS_ENABLE=5, FS_THR_ENABLE=3)."))
+
+    if not outdoor and "EK3_SRC1_POSZ" in p and _i(p, "EK3_SRC1_POSZ") == 1:
+        out.append(Finding("warn", "EK3_SRC1_POSZ=1: the height comes from the barometer, which drifts indoors (often "
+                                   "1-2 m within 20 min). The fence floor/ceiling and take-off heights drift with it - "
+                                   "a drone on the floor can read z = 2 m. With OptiTrack use EK3_SRC1_POSZ=6 "
+                                   "(ExternalNav); change it in Mission Planner and test before flying students."))
 
     if "WPNAV_SPEED" in p and p["WPNAV_SPEED"] / 100.0 > ds.limits.max_speed_xy * 1.5:
         want = int(round(ds.limits.max_speed_xy * 100))

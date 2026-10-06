@@ -44,3 +44,14 @@ def test_outdoor_polygon_and_sim():
     s = fence("sim_arena")
     assert fit_altitude(s, 3.0) == 3.0
     is_square(plan_square(s, (0.0, 0.0), 3.0, 0.5), 3.0)
+
+
+def test_heights_are_relative_to_the_takeoff_point():
+    from dronelab.demos.square import plan_height
+    f = fence()                                    # indoor: z [0.5, 2.5]
+    assert plan_height(f, 0.05, 3.0) == 2.5 - 0.3 - 0.05
+    # drifted height reference: on the floor it reads 2.0 m -> refuse instead of flying 0.2 m above the floor
+    import pytest
+    with pytest.raises(ValueError, match="height reference"):
+        plan_height(f, 2.0, 3.0)
+    assert abs(plan_height(f, -0.4, 1.0) - 1.1) < 1e-9   # reads 0.4 m low: climbs 1.1 m to reach the fence floor + 0.2

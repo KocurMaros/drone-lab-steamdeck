@@ -90,33 +90,28 @@ Topics exist only while a drone is **connected** in the Flight app (the Flight a
 ROS). The drone tab shows `Students: ROS_DOMAIN_ID=0 via wlan0 192.168.88.250` – the Deck's interface
 and IP students must reach.
 
-**Student PC** (ROS 2 Humble, same network as the Deck, any RMW – Fast DDS default or CycloneDDS):
+**Student PC** (ROS 2 Humble, same network as the Deck) – **CycloneDDS is required**. With the Humble
+default (Fast DDS) students *see* all topics and can publish setpoints, but **services do not work**
+between Fast DDS and CycloneDDS: requests arrive garbled (`set_mode: custom_mode is empty`, arming
+`true` arrives as `false`) and the reply never comes back. The gate explains this on `/droneNN/error`.
 
 ```bash
-unset ROS_LOCALHOST_ONLY ROS_DISCOVERY_SERVER
-export ROS_DOMAIN_ID=0
-ros2 daemon stop            # the daemon caches an old view of the network
-ros2 topic list             # /drone11/state, /drone11/local_position/pose, ...
-```
-
-Nothing else is needed when the network passes multicast. If it does not (some Wi-Fi), tell the PC
-the Deck's IP explicitly (`192.168.88.250` = the IP shown in the drone tab):
-
-```bash
-# CycloneDDS on the student PC (sudo apt install ros-humble-rmw-cyclonedds-cpp)
+sudo apt install ros-humble-rmw-cyclonedds-cpp        # once
+# in ~/.bashrc:
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI='<CycloneDDS><Domain Id="any"><Discovery><ParticipantIndex>auto</ParticipantIndex><Peers><Peer Address="192.168.88.250"/></Peers></Discovery></Domain></CycloneDDS>'
+export ROS_DOMAIN_ID=0
+unset ROS_LOCALHOST_ONLY ROS_DISCOVERY_SERVER
+# then, in a new terminal:
+ros2 daemon stop            # the daemon caches an old view of the network
+ros2 topic list             # /drone13/state, /drone13/local_position/pose, ...
+ros2 service call /drone13/set_mode mavros_msgs/srv/SetMode "{custom_mode: GUIDED}"
 ```
 
-```xml
-<!-- Fast DDS (Humble default): save as ~/deck.xml, then export FASTRTPS_DEFAULT_PROFILES_FILE=~/deck.xml -->
-<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-  <participant profile_name="deck" is_default_profile="true">
-    <rtps><builtin><initialPeersList>
-      <locator><udpv4><address>192.168.88.250</address></udpv4></locator>
-    </initialPeersList></builtin></rtps>
-  </participant>
-</profiles>
+Nothing else is needed when the network passes multicast. If it does not (some Wi-Fi), also tell the PC
+the Deck's IP (`192.168.88.250` = the IP shown in the drone tab):
+
+```bash
+export CYCLONEDDS_URI='<CycloneDDS><Domain Id="any"><Discovery><ParticipantIndex>auto</ParticipantIndex><Peers><Peer Address="192.168.88.250"/></Peers></Discovery></Domain></CycloneDDS>'
 ```
 
 Students never need the drone's IP: they only talk to the Deck.
@@ -191,9 +186,12 @@ The GCS failsafe only arms itself after the drone has seen a GCS, so RC-only fli
 the Demo) arms, takes off to 3 m, flies a 3 × 3 m square at ≤ 1 m/s, returns above the take-off point
 and lands. It is an ordinary student program (`dronelab/demos/square.py`, a good example for
 students): everything goes through the gate. It places the square where it fits inside the fence with
-0.5 m clearance (starting at the take-off point, or centred on it) and lowers the altitude below the fence
-ceiling – **indoors the ceiling is 2.5 m, so it flies at 2.2 m** unless you raise `z` of `indoor_lab`.
-Moving the RC mode switch stops it immediately; Ctrl+C in its window lands the drone.
+0.5 m clearance (starting at the take-off point, or centred on it). Heights are measured from the
+take-off point and must also fit the fence – **indoors the ceiling is 2.5 m, so it flies ~2.2 m high**
+unless you raise `z` of `indoor_lab`; if the drone's height reading is off (it refuses rather than
+flying low), see *HEIGHT* under Troubleshooting. It never sends a setpoint lower than 0.5 m above the
+take-off point. Moving the RC mode switch stops it immediately and it sends nothing more; any other
+problem (timeout, rejected setpoint) makes it LAND. Ctrl+C in its window lands the drone.
 
 ```bash
 scripts/dronelab.sh square --drone 11 --alt 2 --side 2 --speed 0.5   # options; without --drone it asks
@@ -255,14 +253,14 @@ The arena is generated from `sim/course/arena.yaml` (gates, buildings, trees, fe
 ## Testing
 
 * `python3 -m pytest tests` – fence geometry, command validation, RC takeover rules, parameter review,
-  square planning, discovery (against pymavlink frames), race logic, config consistency (59 tests, no ROS
+  square planning, height checks, DDS config, discovery (against pymavlink frames), race logic, config consistency (66 tests, no ROS
   needed).
 * `scripts/dronelab.sh selftest` – headless end-to-end run in the container: Gazebo + ArduCopter SITL +
   MAVROS behind the gate, flown through the student API. Checks isolation, the parameter check, the
   square demo, arming/takeoff rules, wall slow-down, the 0.5 s hover watchdog, rejected setpoints,
   feed-forward removal, mode rules, an RC pilot taking over in LOITER (with RC-override sticks) and flying
   out of the fence without the gate interfering, hand-back, breach → LAND + lock, release, landing and
-  *Fix on the drone*. 37 checks, ~6 min; stop the Demo first.
+  *Fix on the drone*, and that a Fast DDS student PC gets an explanation. 38 checks, ~6 min; stop the Demo first.
 
 ## Files
 
@@ -291,6 +289,15 @@ from the apps' menus.
 
 ## Troubleshooting
 
+* **Students see topics but services do nothing** (`set_mode: custom_mode is empty`, no reply on the PC)
+  – the PC uses Fast DDS; set `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` (see *Student interface*).
+* **A setpoint does nothing** – read `ros2 topic echo /droneNN/error` (or the list in the Flight app):
+  the gate always says why (outside the fence, no fresh position, not GUIDED, locked, RC pilot...).
+  ArduPilot ignores position targets on the ground: `cmd/takeoff` first.
+* **HEIGHT: the drone stands on the ground but its height reads ...** – the height reference is off
+  (barometer drift indoors: `EK3_SRC1_POSZ=1`; OptiTrack height is `6`), so the fence floor/ceiling would
+  be off too. Students cannot arm until it reads ~0; reboot the flight controller or fix the source.
+  `gate.ground_tolerance_m: 0` disables the check.
 * **Students see no topics** – is the drone *connected* in the Flight app? On the student PC:
   `printenv | grep ROS` (domain 0, no `ROS_LOCALHOST_ONLY`), `ros2 daemon stop`, firewall (`sudo ufw
   status`). Test without DroneLab: in DroneLab Shell `ros2 topic pub -r 1 /hello std_msgs/msg/String

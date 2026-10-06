@@ -180,7 +180,7 @@ def test_mode_rules():
 
 def test_arming_rules():
     g = box_gate()
-    assert g.check_arm(True, st(armed=False, landed=LANDED_ON_GROUND)).value == "arm_sequence"
+    assert g.check_arm(True, st(z=0.0, armed=False, landed=LANDED_ON_GROUND)).value == "arm_sequence"
     assert box_gate(arm_sequence="direct").check_arm(True, st(armed=False)).value == "arm"
     assert g.check_arm(False, st(armed=True, landed=LANDED_IN_AIR)).value == "land_instead"
     assert g.check_arm(False, st(armed=True, landed=LANDED_ON_GROUND)).value == "disarm"
@@ -418,3 +418,26 @@ def test_stop_speed_model():
     for d in (0.3, 1.0, 5.0, 15.0):
         v = geo.simple_stop_speed(d, 3.0, 1.5)
         assert v * 1.5 + v * v / 6.0 == pytest.approx(d)
+
+
+def test_ground_height_must_be_near_zero_indoors():
+    g = box_gate()
+    ok = st(z=0.05, armed=False, mode="LOITER")
+    assert g.ground_problem(ok) is None and g.check_arm(True, ok).ok
+    drifted = st(z=2.0, armed=False, mode="LOITER", landed=LANDED_ON_GROUND)
+    assert "height reads +2.00" in g.ground_problem(drifted)
+    d = g.check_arm(True, drifted)
+    assert not d.ok and d.key == "ground_z"
+    g.rules.ground_tolerance_m = 0                 # check disabled in the config
+    assert g.check_arm(True, drifted).ok
+
+
+def test_fast_dds_garbled_requests_get_a_hint():
+    from dronelab.safety import RMW_HINT
+    g = box_gate()
+    d = g.check_mode("", st(mode="GUIDED", armed=True))
+    assert not d.ok and RMW_HINT in d.reason
+    d = g.check_takeoff(0.0, st(mode="GUIDED", armed=True, z=0.0))
+    assert not d.ok and "rmw_cyclonedds_cpp" in d.reason
+    d = g.check_arm(False, st(armed=False))
+    assert d.ok and d.value == "noop_disarmed"

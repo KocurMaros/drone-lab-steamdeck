@@ -63,6 +63,10 @@ gate:
   #   none  -> only publish errors
   breach_action: land
   breach_samples: 3                   # consecutive out-of-fence poses before acting
+  # Indoor (local) fences: a drone on the ground must read z = 0 +- this many metres, otherwise its
+  # height reference is off (barometer drift, OptiTrack floor not at z=0) and so would be the fence
+  # floor/ceiling -> students cannot arm. 0 disables the check. A profile can override it.
+  ground_tolerance_m: 0.5
   # Modes students may select (a profile can override this). Not RTL indoors: it climbs to
   # RTL_ALT (15 m on the lab drones) at full speed. Not LOITER/POSHOLD/ALT_HOLD: those are the RC
   # pilot's modes - when the drone is in a mode that neither the students nor the Deck chose (the

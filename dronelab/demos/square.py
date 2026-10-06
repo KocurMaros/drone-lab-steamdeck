@@ -38,7 +38,12 @@ XY = Tuple[float, float]
 
 
 class Abort(Exception):
-    pass
+    """Stop the demo. land=True: we still own the flight (GUIDED) -> land instead of leaving it hovering.
+    land=False: someone else took over (RC pilot, instructor, failsafe) -> send nothing more."""
+
+    def __init__(self, msg: str, land: bool = True):
+        super().__init__(msg)
+        self.land = land
 
 
 # ----------------------------------------------------------------------------- geometry (pure)
@@ -92,8 +97,26 @@ def plan_square(fence: Fence, start: XY, side: float, min_clear: float) -> Optio
     return None if best is None else best + [best[0]]
 
 
+MIN_HEIGHT = 0.8        # never fly the square lower than this above the take-off point
+
+
+def plan_height(fence: Fence, ground_fz: float, wanted: float, headroom: float = 0.3) -> float:
+    """Height above the TAKE-OFF POINT to fly at. The fence checks ground_fz + height (fence frame), so it
+    must stay within [zmin + 0.2, zmax - headroom]. Raises ValueError when there is no room - e.g. indoors
+    with a drifted height reference (the drone on the floor reads z = 2 m under a 2.5 m ceiling)."""
+    hmax = fence.zmax - headroom - ground_fz
+    hmin = max(MIN_HEIGHT, fence.zmin + 0.2 - ground_fz)
+    if hmax < hmin:
+        raise ValueError(f"no room: on the ground the drone reads z = {ground_fz:+.2f} m, the fence allows "
+                         f"z <= {fence.zmax:g} m, so it could climb only {max(hmax, 0):.1f} m (needs {hmin:.1f} m). "
+                         f"If the drone really stands on the floor, its height reference is off "
+                         f"(barometer drift? use OptiTrack height EK3_SRC1_POSZ=6, or reboot the flight controller)")
+    return min(max(wanted, hmin), hmax)
+
+
 def fit_altitude(fence: Fence, wanted: float, headroom: float = 0.3) -> float:
-    return max(min(wanted, fence.zmax - headroom), fence.zmin + 0.2)
+    """Fence-frame altitude for a drone taking off from z = 0."""
+    return plan_height(fence, 0.0, wanted, headroom)
 
 
 # ----------------------------------------------------------------------------- ROS side
@@ -219,6 +242,7 @@ class SquareFlight:
         self.log = log
         self.pilot: Optional[Pilot] = None
         self.flying = False          # we armed/took off and still own the flight
+        self.min_z = -1e9            # lowest setpoint z allowed (student frame)
         self.stop = threading.Event()
 
     # ---- state checks (called in every loop iteration)
@@ -227,17 +251,18 @@ class SquareFlight:
             raise Abort("stopped")
         st, s = self.pilot.state, self.pilot.status
         if st is None or not st.connected:
-            raise Abort("lost the drone (no /state)")
+            raise Abort("lost the drone (no /state)", land=False)
         if s.get("locked"):
-            raise Abort(f"the gate locked student commands: {s.get('lock_reason')}")
+            raise Abort(f"the gate locked student commands: {s.get('lock_reason')}", land=False)
         if s.get("pilot_control"):
-            raise Abort(f"the RC pilot / a failsafe took over ({s.get('pilot_control')}) - nothing more is sent")
+            raise Abort(f"the RC pilot / a failsafe took over ({s.get('pilot_control')}) - nothing more is sent",
+                        land=False)
         if need_air:
             if not st.armed:
-                raise Abort("the drone disarmed")
+                raise Abort("the drone disarmed", land=False)
             if st.mode != "GUIDED":
                 raise Abort(f"the drone left GUIDED (now {st.mode}): RC pilot, instructor or failsafe took over - "
-                            f"nothing more is sent")
+                            f"nothing more is sent", land=False)
 
     def wait(self, cond, timeout, what, need_air=True, step=0.1, guard=True):
         t0 = time.time()
@@ -279,6 +304,11 @@ class SquareFlight:
             return self._fly()
         except Abort as e:
             self.log(f"STOPPED: {e}")
+            st = p.state
+            if e.land and self.flying and st is not None and st.armed and st.mode == "GUIDED":
+                self.log("the demo still owns the flight -> LANDING")
+                if not p.land():
+                    self.log("LAND was rejected - take over with the RC!")
             return 2
         finally:
             p.close()
@@ -287,24 +317,41 @@ class SquareFlight:
         a, p = self.a, self.pilot
         s = p.status
         fence = fence_from_status(s["fence"])
-        alt = fit_altitude(fence, a.alt)
-        if alt < a.alt - 1e-6:
-            self.log(f"NOTE: {a.alt:g} m is above the fence ceiling ({fence.zmax:g} m): flying at {alt:.1f} m")
+        if s.get("ground_problem") and not p.state.armed:
+            raise Abort(s["ground_problem"], land=False)
         lim = float((s.get("limits") or {}).get("max_speed_xy", a.speed))
         speed = min(a.speed, lim)
         fpos = Vec3(*s["pos"])
+        lp = p.pose
         corners = plan_square(fence, (fpos.x, fpos.y), a.side, a.clearance)
         if corners is None:
             raise Abort(f"a {a.side:g} m square with {a.clearance:g} m clearance does not fit inside the fence "
-                        f"around the drone ({fpos.x:.1f}, {fpos.y:.1f}) - move the drone or use --side")
-        # student (local) coordinates = fence coordinates - offset (0 indoors; GPS vs EKF origin outdoors)
-        lp = p.pose
-        off = (fpos.x - lp.x, fpos.y - lp.y, fpos.z - lp.z)
-        pts = [Vec3(x - off[0], y - off[1], alt - off[2]) for x, y in corners]
-        home = Vec3(lp.x, lp.y, alt - off[2])          # above the take-off point: it lands where it started
-        self.log(f"square {a.side:g} x {a.side:g} m at {alt:.1f} m, {speed:.1f} m/s, corners (fence frame): "
-                 + " ".join(f"({x:.1f},{y:.1f})" for x, y in corners[:-1]))
+                        f"around the drone ({fpos.x:.1f}, {fpos.y:.1f}) - move the drone or use --side", land=False)
         st = p.state
+        # Heights. On the ground: everything relative to the take-off point (that is what cmd/takeoff uses),
+        # checked against the fence in its own frame. Already flying: the fence frame decides.
+        if not st.armed:
+            try:
+                h = plan_height(fence, fpos.z, a.alt)
+            except ValueError as e:
+                raise Abort(str(e), land=False)
+            z_sq = lp.z + h                          # student frame
+            self.min_z = lp.z + 0.5                  # never send a setpoint lower than this
+            what = f"{h:.1f} m above the take-off point"
+        else:
+            alt = fit_altitude(fence, a.alt)
+            z_sq = lp.z + (alt - fpos.z)
+            self.min_z = lp.z + (fence.zmin + 0.2 - fpos.z)
+            h = None
+            what = f"z = {alt:.1f} m (fence frame)"
+        if a.alt > (h if h is not None else alt) + 1e-6:
+            self.log(f"NOTE: {a.alt:g} m does not fit under the fence ceiling ({fence.zmax:g} m): flying at {what}")
+        # student (local) xy = fence xy - offset (0 indoors; GPS vs EKF origin outdoors)
+        off = (fpos.x - lp.x, fpos.y - lp.y)
+        pts = [Vec3(x - off[0], y - off[1], z_sq) for x, y in corners]
+        home = Vec3(lp.x, lp.y, z_sq)                 # above the take-off point: it lands where it started
+        self.log(f"square {a.side:g} x {a.side:g} m at {what}, {speed:.1f} m/s, corners (fence frame): "
+                 + " ".join(f"({x:.1f},{y:.1f})" for x, y in corners[:-1]))
         if not a.yes and sys.stdin.isatty():
             ans = input(f"Drone {a.drone} ({st.mode}, {'ARMED' if st.armed else 'disarmed'}) will "
                         f"{'take off and ' if not st.armed else ''}fly this square. Area clear? [y/N] ")
@@ -333,10 +380,15 @@ class SquareFlight:
                     raise Abort(f"armed, but GUIDED was not accepted (mode {p.state.mode})")
                 p.set_mode("GUIDED")
                 time.sleep(0.5)
-            self.log(f"taking off to {alt:.1f} m ...")
-            if not p.takeoff(alt):
+            self.log(f"taking off to {h:.1f} m ...")
+            if not p.takeoff(h):
                 raise Abort("take-off rejected (see the gate's errors above)")
-            self.wait(lambda: p.pose.z >= pts[0].z - 0.3, 40, "climb")
+            try:
+                self.wait(lambda: p.pose.z >= z_sq - 0.3, 40, "climb")
+            except Abort as e:
+                if str(e).startswith("timeout"):
+                    raise Abort(f"climb timeout: reached {p.pose.z - lp.z:.1f} of {h:.1f} m above the take-off point")
+                raise
         else:
             st = p.state
             if st.mode != "GUIDED":
@@ -367,10 +419,13 @@ class SquareFlight:
         dur = max(length / max(speed, 0.05), 0.1)
         self.log(f"-> {label} ({b.x:.1f}, {b.y:.1f}, {b.z:.1f})")
         t0 = time.time()
+        if b.z < self.min_z:
+            raise Abort(f"refusing to fly to z = {b.z:.2f} (lower than {self.min_z:.2f}, 0.5 m above the take-off "
+                        f"point) - height reference changed?")
         while True:
             self.guard()
             k = min(1.0, (time.time() - t0) / dur)
-            p.goto(Vec3(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k))
+            p.goto(Vec3(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, max(a.z + (b.z - a.z) * k, self.min_z)))
             if k >= 1.0 and math.dist((p.pose.x, p.pose.y, p.pose.z), (b.x, b.y, b.z)) < self.a.tolerance:
                 break
             if time.time() - t0 > dur + 20:

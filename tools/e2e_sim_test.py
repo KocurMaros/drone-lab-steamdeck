@@ -271,6 +271,18 @@ def main():
         check("parameter review: RC_OPTIONS overrides flagged (SITL default 0)",
               any("RC_OPTIONS" in w for w in st.get("param_warnings") or []))
 
+        # ---- a student PC on Fast DDS (the Humble default): topics work, services arrive garbled -> explained
+        env = dict(os.environ, RMW_IMPLEMENTATION="rmw_fastrtps_cpp", ROS_DOMAIN_ID=str(ds.student_domain))
+        env.pop("CYCLONEDDS_URI", None)
+        tt = time.monotonic()
+        try:
+            subprocess.run(["ros2", "service", "call", f"{ds.student_ns}/cmd/arming", "mavros_msgs/srv/CommandBool",
+                            "{value: true}"], env=env, capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            pass                                   # the reply never reaches a Fast DDS client
+        check("Fast DDS student: garbled service call explained (needs CycloneDDS), nothing armed",
+              s.wait(lambda: bool(s.errors_since(tt, "rmw_cyclonedds_cpp")), 5) and not s.state.armed)
+
         # ---- the square demo from the pad (arms, takes off, 3 x 3 m, lands)
         track = []
         sampling = threading.Event()
@@ -446,11 +458,11 @@ def main():
         time.sleep(3)
         st = status()
         p = st.get("params") or {}
-        check("after the fix: RC overrides ignored, GCS failsafe on, no warnings",
+        fixable = [f["text"] for f in st.get("param_review") or [] if f["level"] == "warn" and f["fix"]]
+        check("after the fix: RC overrides ignored, GCS failsafe on, nothing left to fix",
               int(p.get("RC_OPTIONS", 0)) & 2 and int(p.get("FS_GCS_ENABLE", 0)) == 5
-              and int(p.get("FS_OPTIONS", 0)) & 16 and not st.get("param_warnings"),
-              f"(RC_OPTIONS={p.get('RC_OPTIONS')}, FS_GCS_ENABLE={p.get('FS_GCS_ENABLE')}, "
-              f"warnings={st.get('param_warnings')})")
+              and int(p.get("FS_OPTIONS", 0)) & 16 and not fixable,
+              f"(RC_OPTIONS={p.get('RC_OPTIONS')}, FS_GCS_ENABLE={p.get('FS_GCS_ENABLE')}, left={fixable})")
     finally:
         print("\n=== SUMMARY ===")
         for name, ok, d in RESULTS:

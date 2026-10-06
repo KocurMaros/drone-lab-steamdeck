@@ -199,6 +199,8 @@ class DronePanel(QWidget):
         if st.get("locked"):
             warn.append(f"LOCKED: {st.get('lock_reason')}. Student commands are blocked until you press "
                         f"RELEASE LOCK.")
+        if st.get("ground_problem"):
+            warn.append("HEIGHT: " + st["ground_problem"])
         if pilot:
             warn.append(f"RC PILOT HAS CONTROL ({pilot}): student commands are ignored and the gate does not "
                         f"enforce its fence. Give it back with ··· -> GUIDED (or a GUIDED switch position).")
@@ -228,6 +230,7 @@ class DronePanel(QWidget):
         self.i_title.setText(f"Drone {st.get('sysid')} · {st.get('profile_label')}")
         ns = st.get("student_ns", "")
         self.i_ns.setText(f"Students: ROS_DOMAIN_ID={st.get('student_domain')} via {st.get('student_iface', '?')}\n"
+                          f"  RMW_IMPLEMENTATION=rmw_cyclonedds_cpp (services!)\n"
                           f"  {ns}/setpoint_position/local\n"
                           f"  {ns}/cmd/arming · {ns}/error\n"
                           f"  {st.get('relayed_topics', 0)} MAVROS topics relayed\n"

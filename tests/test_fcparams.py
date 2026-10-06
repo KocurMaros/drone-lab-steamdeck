@@ -67,5 +67,13 @@ def test_param_files_match_review():
         p = fcparams.load_param_file(LAB_DRONE)
         p.update(fcparams.load_param_file(os.path.join(REPO, "drones", "params", f"{name}-rc-takeover.param")))
         ds = cfg().drone(10, profile)
-        assert [f.text for f in fcparams.review(p, ds) if f.level == "warn"] == [], name
+        # every warning the file can fix is fixed (EKF height source is a manual, drone-specific change)
+        assert [f.text for f in fcparams.review(p, ds) if f.level == "warn" and f.fix] == [], name
         assert int(p["RC_OPTIONS"]) & 2 and int(p["FS_OPTIONS"]) & 16
+
+
+def test_indoor_barometer_height_is_flagged():
+    p = fcparams.load_param_file(LAB_DRONE)            # EK3_SRC1_POSZ=1 (baro)
+    warns = [f for f in fcparams.review(p, cfg().drone(10)) if f.level == "warn"]
+    assert any("EK3_SRC1_POSZ=1" in f.text and not f.fix for f in warns)     # explained, never auto-changed
+    assert not any("EK3_SRC1_POSZ" in f.text for f in fcparams.review(p, cfg().drone(10, "outdoor_field")))
