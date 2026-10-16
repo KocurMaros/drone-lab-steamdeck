@@ -201,7 +201,7 @@ class Pilot:
     def arm(self) -> bool:
         r = self.CommandBool.Request()
         r.value = True
-        res = self._call(self.c_arm, r, timeout=25.0)      # the gate runs LOITER -> ARM -> GUIDED
+        res = self._call(self.c_arm, r, timeout=25.0)      # the gate runs GUIDED -> ARM
         return bool(res and res.success)
 
     def takeoff(self, alt: float) -> bool:
@@ -366,7 +366,7 @@ class SquareFlight:
             t0 = time.time()
             while True:
                 self.guard(need_air=False)
-                if p.arm():                       # real drones: the gate runs LOITER -> ARM -> GUIDED
+                if p.arm():                       # the gate runs GUIDED -> ARM
                     break
                 if time.time() - t0 > a.arm_timeout:
                     raise Abort("could not arm (pre-arm checks / EKF not ready?) - see the gate's errors above")

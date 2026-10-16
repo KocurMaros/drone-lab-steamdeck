@@ -370,10 +370,14 @@ class Limits:
     stop_buffer_m: float = 0.2
 
 
+# cmd/arming(true): "guided" = set GUIDED, then arm (ArduCopter accepts MAVLink arming in GUIDED; only arming
+# from the RC transmitter in GUIDED needs GUID_OPTIONS bit 0). "direct" = arm in the current mode.
+ARM_SEQUENCES = ("guided", "direct")
+
+
 @dataclass
 class Rules:
-    arm_sequence: str = "loiter_arm_guided"   # or "direct"
-    guided_requires_armed: bool = True
+    arm_sequence: str = "guided"
     # RTL climbs to RTL_ALT and flies at WPNAV speed (ignores the gate) -> not allowed indoors by default;
     # ALT_HOLD/POSHOLD need RC sticks, students have none.
     allowed_modes: List[str] = field(default_factory=lambda: ["GUIDED", "LAND", "BRAKE"])
@@ -385,6 +389,8 @@ class Rules:
     ground_tolerance_m: float = 0.5
 
     def __post_init__(self):
+        if self.arm_sequence not in ARM_SEQUENCES:
+            raise ValueError(f"arm_sequence must be {' or '.join(ARM_SEQUENCES)}, not '{self.arm_sequence}'")
         self.allowed_modes = [m.upper() for m in self.allowed_modes]
         if "LAND" not in self.allowed_modes:
             self.allowed_modes.append("LAND")     # landing must always be possible
@@ -681,9 +687,6 @@ class CommandGate:
         if mode not in self.rules.allowed_modes:
             return self._count(Decision.reject(f"mode {mode or '<empty>'} not allowed; allowed: "
                                                f"{', '.join(self.rules.allowed_modes)}", key="mode"))
-        if mode == "GUIDED" and self.rules.guided_requires_armed and not state.armed:
-            return self._count(Decision.reject("GUIDED is only allowed after arming (arm in LOITER first; "
-                                               "cmd/arming does the whole sequence)", key="guided_arm"))
         return self._count(Decision(True, value=mode))
 
     def check_arm(self, value: bool, state: VehicleState) -> Decision:
@@ -697,7 +700,7 @@ class CommandGate:
                 return self._count(Decision(True, "already armed", value="noop"))
             if (why := self.ground_problem(state)):
                 return self._count(Decision.reject("arming refused: " + why, key="ground_z"))
-            return self._count(Decision(True, value="arm_sequence" if self.rules.arm_sequence == "loiter_arm_guided"
+            return self._count(Decision(True, value="arm_sequence" if self.rules.arm_sequence == "guided"
                                         else "arm"))
         if state.armed and state.in_air:
             return self._count(Decision(True, "in the air: switching to LAND instead of cutting the motors",

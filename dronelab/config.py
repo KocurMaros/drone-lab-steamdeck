@@ -173,8 +173,7 @@ class Config:
         if action not in ("land", "brake", "none"):
             raise ValueError("gate.breach_action must be land, brake or none")
         rules = Rules(
-            arm_sequence=str(d.get("arm_sequence", "loiter_arm_guided")),
-            guided_requires_armed=bool(d.get("guided_requires_armed", True)),
+            arm_sequence=str(d.get("arm_sequence", "guided")).lower(),
             allowed_modes=[str(m).upper() for m in prof.get("allowed_modes",
                                                             g.get("allowed_modes", Rules().allowed_modes))],
             breach_action=action,

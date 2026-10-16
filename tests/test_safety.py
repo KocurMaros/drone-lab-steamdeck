@@ -171,17 +171,17 @@ def test_raw_rejects_accel_partial_and_bad_frames():
 # ---------------------------------------------------------------- services
 def test_mode_rules():
     g = box_gate()
-    assert not g.check_mode("GUIDED", st(armed=False)).ok
+    assert g.check_mode("GUIDED", st(armed=False)).ok      # ArduCopter arms in GUIDED over MAVLink
     assert g.check_mode("guided", st(armed=True)).ok
     assert not g.check_mode("ACRO", st()).ok
-    g2 = box_gate(guided_requires_armed=False)
-    assert g2.check_mode("GUIDED", st(armed=False)).ok
 
 
 def test_arming_rules():
     g = box_gate()
     assert g.check_arm(True, st(z=0.0, armed=False, landed=LANDED_ON_GROUND)).value == "arm_sequence"
     assert box_gate(arm_sequence="direct").check_arm(True, st(armed=False)).value == "arm"
+    with pytest.raises(ValueError):
+        Rules(arm_sequence="loiter_arm_guided")                 # removed: real drones arm in GUIDED
     assert g.check_arm(False, st(armed=True, landed=LANDED_IN_AIR)).value == "land_instead"
     assert g.check_arm(False, st(armed=True, landed=LANDED_ON_GROUND)).value == "disarm"
 
@@ -330,7 +330,7 @@ def test_students_cannot_leave_instructor_or_failsafe_modes():
     g.student_mode = "LAND"
     assert g.check_mode("GUIDED", s).ok              # the student's own landing may be aborted
     g.student_mode = ""
-    assert g.check_mode("GUIDED", st(mode="LAND", armed=False)).ok is False  # GUIDED needs armed anyway
+    assert g.check_mode("GUIDED", st(mode="LAND", armed=False)).ok           # on the ground: fine
     assert g.check_mode("BRAKE", st(mode="LAND", armed=False)).ok            # on the ground: fine
     assert not g.check_mode("LOITER", st(mode="GUIDED", armed=True)).ok      # LOITER is the RC pilot's mode
 
@@ -359,7 +359,7 @@ def test_rc_pilot_takeover_blocks_students_and_breach_actions():
 
 def test_student_and_gate_modes_are_not_pilot_takeover():
     g = box_gate()
-    g.student_mode = "LOITER"                 # e.g. the arming sequence's LOITER step
+    g.student_mode = "LOITER"                 # a mode chosen from the Deck (e.g. the Demo app)
     assert g.pilot_control(st(mode="LOITER")) is None
     assert g.pilot_control(st(mode="GUIDED")) is None
     assert g.pilot_control(st(mode="ALT_HOLD", armed=False)) is None   # disarmed: nobody flies
@@ -395,6 +395,7 @@ def test_config_validation(tmp_path):
     data = yaml.safe_load(open(DEFAULT_CONFIG))
     cfg = Config(data)
     assert "RTL" not in cfg.drone(11).rules.allowed_modes
+    assert cfg.drone(11).rules.arm_sequence == "guided" and cfg.drone(1).rules.arm_sequence == "direct"
     assert "RTL" in cfg.drone(11, "outdoor_field").rules.allowed_modes
     for prof in (None, "outdoor_field", "sim_arena"):
         assert "LOITER" not in cfg.drone(11, prof).rules.allowed_modes     # LOITER belongs to the RC pilot

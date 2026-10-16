@@ -43,8 +43,10 @@ network:
 drone_defaults:
   student_ns: "/drone{sysid}"        # students use /drone11/..., /drone12/... etc.
   fence_profile: indoor_lab
-  arm_sequence: loiter_arm_guided     # real ArduCopter cannot arm in GUIDED
-  guided_requires_armed: true
+  # cmd/arming(true): guided = switch to GUIDED, then arm. ArduCopter accepts arming in GUIDED when the
+  # command comes over MAVLink (MAVROS, QGroundControl); only arming from the RC transmitter in GUIDED
+  # needs GUID_OPTIONS bit 0. direct = arm in whatever mode the drone is in.
+  arm_sequence: guided
   mavros_launch: apm                  # MAVROS parameter set: apm (ArduPilot) or px4
   mavros_system_id: 255               # = ArduPilot SYSID_MYGCS, so FS_GCS_ENABLE treats the Deck as the GCS
   gcs_url: ""                         # e.g. "udp-b://@14560" to mirror to QGroundControl (also a command path!)
@@ -53,7 +55,6 @@ drone_overrides:
   1:                                  # SITL / demo drone
     fence_profile: sim_arena
     arm_sequence: direct
-    guided_requires_armed: false
 
 gate:
   # What to do when the MEASURED position leaves the fence (+ margin):

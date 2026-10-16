@@ -862,18 +862,16 @@ class Gate:
         return False, "arming command accepted but state did not change"
 
     def arm_sequence(self) -> Tuple[bool, str]:
-        self.cg.student_mode = "LOITER"     # gate-chosen, not a pilot takeover
-        ok, msg = self.set_mode("LOITER")
-        if not ok:
-            return False, "LOITER: " + msg
-        ok, msg = self.arm(True)
-        if not ok:
-            return False, "ARM: " + msg
+        """GUIDED -> ARM. ArduCopter accepts arming in GUIDED over MAVLink (as from QGroundControl); only arming
+        from the RC transmitter in GUIDED would need GUID_OPTIONS bit 0."""
         self.cg.student_mode = "GUIDED"
         ok, msg = self.set_mode("GUIDED")
         if not ok:
             return False, "GUIDED: " + msg
-        return True, "LOITER -> ARM -> GUIDED done; take off within ~10 s or ArduPilot disarms again"
+        ok, msg = self.arm(True)
+        if not ok:
+            return False, "ARM: " + msg
+        return True, "GUIDED -> ARM done; take off within ~10 s or ArduPilot disarms again"
 
     def _busy(self, res, what: str):
         self._error(f"{what}: too many service calls in progress, try again", key="svc_busy")
@@ -1056,12 +1054,7 @@ class Gate:
             if not st.armed and (why := self.cg.ground_problem(st)):
                 return False, why
             if not st.armed:
-                if self.ds.rules.arm_sequence == "loiter_arm_guided":
-                    ok, msg = self.arm_sequence()
-                else:
-                    ok, msg = self.set_mode("GUIDED")
-                    if ok:
-                        ok, msg = self.arm(True)
+                ok, msg = self.arm_sequence()        # take-off needs GUIDED whatever arm_sequence says
                 if not ok:
                     return False, msg
             elif st.mode != "GUIDED":

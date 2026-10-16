@@ -131,8 +131,8 @@ Students never need the drone's IP: they only talk to the Deck.
 | `setpoint_raw/local` | `mavros_msgs/PositionTarget` | frames 1, 7, 8, 9; full position or full velocity; acceleration/force rejected (with a hover); a feed-forward velocity next to a position is removed (ArduPilot would push the target through the fence) |
 | `setpoint_position/global` | `geographic_msgs/GeoPoseStamped` | outdoor fences only. **Altitude is relative to home**, not AMSL |
 | `setpoint_raw/global` | `mavros_msgs/GlobalPositionTarget` | outdoor only, `coordinate_frame` 6, position only |
-| `cmd/arming` | `mavros_msgs/CommandBool` | `true`: LOITER → ARM → GUIDED (real drones cannot arm in GUIDED). `false` in the air = LAND instead of cutting the motors |
-| `set_mode` | `mavros_msgs/SetMode` | allow-list per fence profile (GUIDED, LAND, BRAKE; RTL only outdoors/sim). LOITER/POSHOLD/ALT_HOLD belong to the RC pilot. GUIDED only once armed |
+| `cmd/arming` | `mavros_msgs/CommandBool` | `true`: GUIDED → ARM (ArduCopter accepts MAVLink arming in GUIDED). `false` in the air = LAND instead of cutting the motors |
+| `set_mode` | `mavros_msgs/SetMode` | allow-list per fence profile (GUIDED, LAND, BRAKE; RTL only outdoors/sim). LOITER/POSHOLD/ALT_HOLD belong to the RC pilot |
 | `cmd/takeoff` | `mavros_msgs/CommandTOL` | armed + GUIDED + altitude within the fence |
 | `cmd/land` | `mavros_msgs/CommandTOL` | always allowed (except while the RC pilot has control) |
 | `error` | `std_msgs/String` | every rejection / limitation, rate limited per error type |

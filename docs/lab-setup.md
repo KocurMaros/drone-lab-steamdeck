@@ -150,9 +150,7 @@ Once all setup steps are complete and the LED is solid green, the drone is ready
 
 ### Flight Controls & Arming
 
-**IMPORTANT:** On real drones you **cannot** arm in GUIDED mode. You must arm in **LOITER** mode first.
-
-The connector enforces this sequence automatically – it will reject arming in GUIDED and reject switching to GUIDED before arming.
+**Arming and GUIDED:** ArduCopter accepts arming in GUIDED when the command comes over MAVLink (ROS 2 / MAVROS through the gate, QGroundControl). Only arming from the **transmitter** is blocked in GUIDED (unless `GUID_OPTIONS` bit 0 is set), so with the RC you arm in **LOITER**.
 
 #### Manual Arming (Transmitter)
 1. Switch **SE** to **LOITER** mode.
@@ -165,7 +163,7 @@ The connector enforces this sequence automatically – it will reject arming in 
 Replace `drone11` with your drone namespace.
 
 **Step 1 – Arm and Takeoff Sequence:**
-The new `arming_node` simplifies the takeoff process. By calling the custom arming service, the drone automatically switches to LOITER, arms, and switches to GUIDED mode.
+The new `arming_node` simplifies the takeoff process. By calling the custom arming service, the drone switches to GUIDED and arms.
 ```bash
 ros2 service call /drone11/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 ```
@@ -217,7 +215,7 @@ The complex arming sequence is abstracted behind a single service call provided 
 
 | Service | Type | Purpose |
 |---------|------|---------|
-| `/drone11/cmd/arming` | `CommandBool` | `true` executes LOITER -> ARM -> GUIDED sequence. `false` sends disarm command. |
+| `/drone11/cmd/arming` | `CommandBool` | `true` executes the GUIDED -> ARM sequence. `false` sends disarm command. |
 
 > **Note:** MAVROS raw services are hidden behind Domain 11 and not natively accessible to students on Domain 0. Always use the `/drone11/cmd/arming` for validated operations.
 

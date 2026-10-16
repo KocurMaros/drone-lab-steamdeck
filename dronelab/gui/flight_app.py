@@ -433,6 +433,7 @@ class FlightWindow(QMainWindow):
         items = (("Open config file", self._open_config), ("Reload config", self._reload),
                  ("Show app log", lambda: self._text_dialog("App log", "\n".join(self.log_lines[-400:]))),
                  ("Open logs folder", lambda: self._xdg(os.path.join(VAR_DIR, "logs"))),
+                 ("Leave full screen" if self.isFullScreen() else "Full screen", self._toggle_fullscreen),
                  ("Quit", self.close), ("Close menu", lambda: None))
         for text, fn in items:
             b = button(text, min_h=60)
@@ -440,9 +441,17 @@ class FlightWindow(QMainWindow):
             lay.addWidget(b)
         d.exec_()
 
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+
     def _xdg(self, path):
         for tool in ("xdg-open", "kate", "gedit", "mousepad"):
             if shutil.which(tool):
+                if self.isFullScreen():
+                    self.showMaximized()     # so the editor / file manager cannot open hidden behind this window
                 subprocess.Popen([tool, path], start_new_session=True)
                 return
         self._text_dialog(path, open(path).read() if os.path.isfile(path) else path)
@@ -819,7 +828,12 @@ def main(argv=None):
     if a.windowed:
         w.show()
     else:
-        w.showMaximized()
+        # full screen on the Steam Deck's own panel (1280x800), also when a monitor/projector is attached
+        deck = next((s for s in QApplication.screens()
+                     if (s.geometry().width(), s.geometry().height()) in ((1280, 800), (800, 1280))),
+                    QApplication.primaryScreen())
+        w.setGeometry(deck.geometry())
+        w.showFullScreen()
     return app.exec_()
 
 
